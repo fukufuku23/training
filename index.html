@@ -13,6 +13,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="トレーニング">
+<script>
+  // 描画前にテーマを当てる。IndexedDB は非同期で間に合わないため、
+  // 表示用の値だけ localStorage に写しておく（実体の設定は storage.js 側）。
+  try {
+    var t = localStorage.getItem("theme") || "light";
+    if (t !== "light") document.documentElement.dataset.theme = t;
+  } catch (e) { /* プライベートモード等では既定のライトのまま */ }
+</script>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -242,6 +250,18 @@
         <p class="field__hint">
           何も選ばない項目は絞り込みなし（すべて対象）になります。設定は自動保存されます。
         </p>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title">表示</h2>
+        <div class="field">
+          <span class="field__label">配色</span>
+          <div class="chip-row" id="chips-theme"></div>
+          <p class="field__hint">
+            既定はライトです。「OSに合わせる」を選んだときだけ、
+            端末のダークモード設定に追従します。
+          </p>
+        </div>
       </section>
 
       <section class="panel">

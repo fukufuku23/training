@@ -616,6 +616,46 @@ function setupWeightInput() {
   });
 }
 
+/* ---------------- 表示テーマ ---------------- */
+
+const THEMES = [
+  { key: "light", label: "ライト" },
+  { key: "dark",  label: "ダーク" },
+  { key: "auto",  label: "OSに合わせる" },
+];
+
+/**
+ * テーマを適用する。
+ * 既定は "light" で、OS のダークモードには追従しない。
+ * "auto" を選んだときだけ CSS 側の prefers-color-scheme が効く。
+ */
+function applyTheme(theme) {
+  const t = THEMES.some((x) => x.key === theme) ? theme : "light";
+  if (t === "light") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("theme", t); } catch (_) { /* 保存できなくても表示は成立する */ }
+
+  // アドレスバーの色も合わせる
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    const dark = t === "dark" ||
+      (t === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    meta.setAttribute("content", dark ? "#121815" : "#F5F8F5");
+  }
+}
+
+function renderThemeChips() {
+  buildValueChips("chips-theme", THEMES.map((t) => t.key),
+    () => state.settings.theme || "light",
+    async (key) => {
+      state.settings.theme = key;
+      applyTheme(key);
+      await persistSettings();
+      renderThemeChips();
+    },
+    (key) => (THEMES.find((t) => t.key === key) || {}).label);
+}
+
 /* ---------------- 設定 ---------------- */
 
 function renderSettingsFilters() {
@@ -652,6 +692,7 @@ async function persistSettings() {
     purposes: Array.from(state.filters.purpose),
     equipment: Array.from(state.filters.equipment),
     default_minutes: state.settings.default_minutes,
+    theme: state.settings.theme,
   });
 }
 
@@ -992,6 +1033,7 @@ async function init() {
   ]);
   state.settings = settings;
   state.log = log;
+  applyTheme(settings.theme);
   state.loggedToday = new Set((log.exercises || []).map((e) => e.id));
 
   state.filters.strengthCategory = new Set(settings.strength_categories);
@@ -1018,6 +1060,7 @@ async function init() {
   renderPainChips();
   syncBodyMapSelection();
   renderSettingsFilters();
+  renderThemeChips();
   renderRangeChips();
   renderToday();
 

@@ -51,8 +51,11 @@
   --shadow: 0 1px 2px rgba(31, 42, 36, 0.06), 0 4px 14px rgba(31, 42, 36, 0.05);
 }
 
+/* OS の設定には既定では追従しない。
+   利用者が設定で「OSに合わせる」を選んだときだけ、この指定が効く。
+   ジムなど明るい場所で使うことを想定し、既定はライトにしている。 */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root[data-theme="auto"] {
     color-scheme: dark;
     --ink: #E8EFE9;        /* 13.6:1 on surface */
     --ink-soft: #C2CDC5;

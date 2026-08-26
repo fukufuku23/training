@@ -84,6 +84,7 @@ export const DEFAULT_SETTINGS = {
   purposes: [],
   equipment: [],
   default_minutes: 30,
+  theme: "light",   // "light" | "dark" | "auto"
 };
 
 export function emptyLog(date) {
