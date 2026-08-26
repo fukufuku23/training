@@ -6,7 +6,7 @@
  * スマホから http://192.168.x.x で開くと登録されない。
  */
 
-const CACHE = "training-log-v2";
+const CACHE = "training-log-v3";
 
 const PRECACHE = [
   "./",
@@ -46,33 +46,31 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // ナビゲーションはネット優先、失敗したらキャッシュのindexを返す
-  if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put("./index.html", copy));
-          return res;
-        })
-        .catch(() => caches.match("./index.html"))
-    );
-    return;
-  }
-
-  // その他は stale-while-revalidate:
-  // キャッシュを即返しつつ裏で取り直す。デプロイのたびに CACHE 名を上げなくても
-  // 次回起動時には新しい CSS/JS が反映される。
+  /*
+   * ネットワーク優先・キャッシュフォールバック。
+   *
+   * 以前は「ナビゲーションはネット優先／その他はキャッシュ優先」にしていたが、
+   * これだと更新直後に「新しいindex.html × 古いapp.js」という組み合わせが発生し、
+   * 存在しない要素を触って起動に失敗する（実際に発生した）。
+   *
+   * オンラインならHTMLもJSも同じ世代がネットから来るので不整合が起きない。
+   * オフラインなら両方とも同じ世代のキャッシュから来るので、やはり整合する。
+   * このアプリは全部で200KB程度なので、ネット優先にしても体感差はほぼない。
+   */
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const network = fetch(req).then((res) => {
+    fetch(req)
+      .then((res) => {
         if (res && res.status === 200 && res.type === "basic") {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }
         return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+      })
+      .catch(() =>
+        caches.match(req).then((cached) =>
+          // ナビゲーションはURLが一致しないことがあるので index.html に落とす
+          cached || (req.mode === "navigate" ? caches.match("./index.html") : undefined)
+        )
+      )
   );
 });

@@ -93,9 +93,14 @@ git commit -m "変更内容"
 git push
 ```
 
-反映まで1〜2分。Service Worker は stale-while-revalidate なので、
-**更新直後の1回は古い画面が出て、次に開くと新しくなる**。すぐ確認したい場合は
-リロードを2回するか、DevTools の Application → Service Workers → Update on reload。
+反映まで1〜2分。**Service Worker はネットワーク優先**にしてあるので、
+オンラインならリロード1回で新しい内容が反映される。
+
+> 以前はキャッシュ優先にしていたが、更新直後に「新しい index.html × 古い app.js」
+> という組み合わせが発生し、削除済みの要素を触って起動に失敗する事故が起きた。
+> ネット優先なら HTML も JS も同じ世代がネットから来るので、この不整合が
+> 構造的に起こらない。オフライン時は両方とも同じ世代のキャッシュから来るため、
+> やはり整合する。全体で200KB程度なので体感差はない。
 
 ### スマホでの確認
 
@@ -179,7 +184,7 @@ CVD分離 ΔE 1.6（基準8以上）となり不合格だった。
 pwa/
 ├── index.html          画面の骨格（人体図SVGを含む）
 ├── manifest.json       PWA設定（アイコン・standalone表示）
-├── sw.js               Service Worker（アプリシェルをキャッシュ）
+├── sw.js               Service Worker（ネット優先・オフライン時はキャッシュ）
 ├── css/style.css       スタイル。ライト/ダーク両対応
 ├── js/
 │   ├── app.js          画面制御。storage.js と domain.js にのみ依存
