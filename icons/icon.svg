@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="トレーニング">
+  <rect width="512" height="512" rx="96" fill="#1B1D29"/>
+  <g fill="#FF5A36">
+    <rect x="96" y="216" width="44" height="80" rx="14"/>
+    <rect x="372" y="216" width="44" height="80" rx="14"/>
+    <rect x="148" y="188" width="56" height="136" rx="18"/>
+    <rect x="308" y="188" width="56" height="136" rx="18"/>
+    <rect x="204" y="238" width="104" height="36" rx="16"/>
+  </g>
+</svg>

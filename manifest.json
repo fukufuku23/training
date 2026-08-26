@@ -1,0 +1,17 @@
+{
+  "name": "筋トレ・ストレッチ管理",
+  "short_name": "トレーニング",
+  "description": "筋トレ・ストレッチ・有酸素運動の日々のトレーニングを管理するアプリ",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#EEF1F5",
+  "theme_color": "#1B1D29",
+  "lang": "ja",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,9 @@
+# OS が作るゴミ
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# エクスポートしたトレーニング記録（個人データ。誤コミット防止）
+training-log-*.json
+
+node_modules/

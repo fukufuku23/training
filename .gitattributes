@@ -1,0 +1,22 @@
+# 改行コードを固定する。
+# このプロジェクトは Linux 側で編集し Windows でコミットする混在環境のため、
+# 明示しないと「作業コピーはCRLF・書き込みはLF」でファイル全体が差分になる。
+
+# 既定：テキストは作業コピーも含めて LF に統一
+* text=auto eol=lf
+
+# Windows 専用スクリプトだけは CRLF でないと壊れる
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.vbs  text eol=crlf
+
+# バイナリは変換しない
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.mp4  binary
+*.woff  binary
+*.woff2 binary
+*.db   binary
