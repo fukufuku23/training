@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="トレーニング">
-  <rect width="512" height="512" rx="96" fill="#1B1D29"/>
-  <g fill="#FF5A36">
-    <rect x="96" y="216" width="44" height="80" rx="14"/>
-    <rect x="372" y="216" width="44" height="80" rx="14"/>
-    <rect x="148" y="188" width="56" height="136" rx="18"/>
-    <rect x="308" y="188" width="56" height="136" rx="18"/>
-    <rect x="204" y="238" width="104" height="36" rx="16"/>
+  <rect width="512" height="512" rx="112" fill="#15803D"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round">
+    <path d="M104 216v80M408 216v80"/>
+    <path d="M178 176v160M334 176v160"/>
+    <path d="M178 256h156"/>
   </g>
 </svg>

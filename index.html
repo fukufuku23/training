@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1B1D29">
+<meta name="theme-color" content="#F5F8F5">
 <meta name="description" content="筋トレ・ストレッチ・有酸素運動の日々のトレーニングを管理するアプリ">
 <!-- 検索エンジンにインデックスさせない（GitHub Pages は誰でもアクセスできるため、
      せめて検索結果には出さない。アクセス制限ではない点に注意） -->
@@ -13,37 +13,28 @@
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="トレーニング">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
-<!-- ============ スコアボード ============ -->
-<header class="scoreboard">
-  <div class="scoreboard__brand">
-    <span class="scoreboard__mark">TRAINING LOG</span>
-    <h1 class="scoreboard__title">筋トレ・ストレッチ管理</h1>
+<!-- ============ ヘッダー ============ -->
+<header class="appbar">
+  <div class="appbar__brand">
+    <span class="appbar__mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M4 9h2v6H4zm14 0h2v6h-2zM7 6h3v12H7zm7 0h3v12h-3zm-4 4h4v4h-4z"/></svg>
+    </span>
+    <span class="appbar__title">トレーニング</span>
   </div>
-  <div class="scoreboard__stats">
-    <div class="stat">
-      <div class="stat__value" id="stat-streak">0</div>
-      <div class="stat__label">連続日数</div>
-    </div>
-    <div class="stat">
-      <div class="stat__value" id="stat-today">0</div>
-      <div class="stat__label">今日 kcal</div>
-    </div>
-    <div class="stat">
-      <div class="stat__value" id="stat-yesterday">-</div>
-      <div class="stat__label">昨日 体重/kcal</div>
-    </div>
+  <div class="appbar__streak" id="streak-badge" title="実施した日と休養日をあわせた継続日数">
+    <span class="appbar__streak-num" id="stat-streak">0</span>
+    <span class="appbar__streak-label">日つづけて<br>います</span>
   </div>
 </header>
 
 <div class="shell">
 
-  <!-- ============ ナビ（モバイル=下部 / PC=サイドバー） ============ -->
   <nav class="nav" aria-label="画面切り替え">
     <button type="button" class="nav__item is-active" data-view="today">
       <span class="nav__icon" aria-hidden="true">
@@ -53,7 +44,7 @@
     </button>
     <button type="button" class="nav__item" data-view="history">
       <span class="nav__icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M4 19h16v2H4zM6 10h3v7H6zm4.5-5h3v12h-3zM15 13h3v4h-3z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M7 2v2h10V2h2v2h2v18H3V4h2V2zm12 8H5v10h14zM7 12h4v4H7z"/></svg>
       </span>
       <span class="nav__label">記録</span>
     </button>
@@ -72,42 +63,58 @@
     <!-- ============================================================ -->
     <section class="view is-active" id="view-today">
 
-      <section class="panel panel--weight">
-        <label class="panel__label" for="weight-input">今日の体重</label>
-        <div class="input-row">
-          <input type="number" id="weight-input" inputmode="decimal" step="0.1"
-                 min="20" max="250" placeholder="60.0" autocomplete="off">
-          <span class="input-unit">kg</span>
-          <button id="save-weight-btn" class="btn btn--solid">保存</button>
+      <!-- コースカード：迷わず始めるための入口。判断は「はじめる」の1つだけ -->
+      <section class="course" id="course-card">
+        <p class="course__badge">今日のメニュー</p>
+        <h2 class="course__title" id="course-title">—</h2>
+        <p class="course__sub" id="course-sub"></p>
+
+        <ol class="steps" id="course-steps"></ol>
+
+        <div class="course__progress">
+          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress__bar" id="course-progress"></div>
+          </div>
+          <span class="progress__label" id="course-progress-label"></span>
         </div>
+
+        <button type="button" class="btn btn--cta" id="start-btn">はじめる</button>
+        <button type="button" class="btn btn--quiet" id="rest-btn">今日は休養日にする</button>
       </section>
 
+      <!-- 体調・時間・痛み：すべて1タップで済ませる -->
       <section class="panel">
         <div class="field">
-          <span class="field__label">今日のコンディション</span>
-          <div class="chip-row" id="chips-condition"></div>
+          <span class="field__label">今日の体調</span>
+          <div class="face-row" id="chips-condition"></div>
           <p class="field__hint" id="condition-hint"></p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">使える時間</span>
+          <div class="chip-row" id="chips-time"></div>
         </div>
 
         <div class="field">
           <span class="field__label">痛い・気になる部位</span>
           <div class="chip-row" id="chips-pain"></div>
           <button type="button" class="btn btn--outline btn--wide" id="open-body-map-btn">
-            人体図から選択
+            人体図から選ぶ
           </button>
         </div>
 
         <div class="field">
-          <span class="field__label">今日使える時間</span>
+          <span class="field__label">今日の体重</span>
           <div class="input-row">
-            <input type="number" id="today-time-input" inputmode="numeric"
-                   min="10" max="120" step="5">
-            <span class="input-unit">分</span>
+            <input type="number" id="weight-input" inputmode="decimal" step="0.1"
+                   min="20" max="250" placeholder="60.0" autocomplete="off">
+            <span class="input-unit">kg</span>
+            <button id="save-weight-btn" class="btn btn--outline">保存</button>
           </div>
         </div>
       </section>
 
-      <p class="menu-summary" id="menu-summary"></p>
+      <h3 class="section-title" id="menu-summary"></h3>
       <section class="cards" id="card-list" aria-label="今日の種目メニュー"></section>
     </section>
 
@@ -115,11 +122,33 @@
     <!-- 記録                                                          -->
     <!-- ============================================================ -->
     <section class="view" id="view-history">
-      <section class="panel">
-        <div class="range-row">
-          <span class="field__label">表示期間</span>
-          <div class="chip-row" id="chips-range"></div>
+
+      <section class="panel panel--cal">
+        <div class="cal__head">
+          <button type="button" class="icon-btn" id="cal-prev" aria-label="前の月">‹</button>
+          <h2 class="cal__title" id="cal-title">—</h2>
+          <button type="button" class="icon-btn" id="cal-next" aria-label="次の月">›</button>
+          <button type="button" class="btn btn--outline btn--sm" id="cal-today">今日</button>
         </div>
+        <div class="cal" id="calendar"></div>
+        <ul class="cal__legend">
+          <li><i class="dot dot--strength"></i>筋トレ</li>
+          <li><i class="dot dot--stretch"></i>ストレッチ</li>
+          <li><i class="dot dot--rest"></i>休養日</li>
+          <li><i class="dot dot--pain"></i>痛みあり</li>
+        </ul>
+      </section>
+
+      <div class="hist-side">
+
+      <section class="panel">
+        <h2 class="panel__title">この月の記録</h2>
+        <div class="kpi-row" id="kpi-row"></div>
+      </section>
+
+      <section class="panel panel--range">
+        <span class="field__label">グラフの期間</span>
+        <div class="chip-row" id="chips-range"></div>
       </section>
 
       <section class="panel">
@@ -133,6 +162,14 @@
       </section>
 
       <section class="panel">
+        <h2 class="panel__title">部位バランス</h2>
+        <p class="field__hint">鍛えた部位の偏りを確認できます。少ない部位は設定で優先しましょう。</p>
+        <div class="chart-wrap" id="chart-balance"></div>
+      </section>
+
+      </div><!-- /.hist-side -->
+
+      <section class="panel panel--history">
         <h2 class="panel__title">実施履歴</h2>
         <div class="history-list" id="history-list"></div>
       </section>
@@ -144,12 +181,8 @@
     <section class="view" id="view-settings">
       <section class="panel">
         <div class="field">
-          <span class="field__label">1日の時間（デフォルト）</span>
-          <div class="input-row">
-            <input type="number" id="settings-time-input" inputmode="numeric"
-                   min="10" max="120" step="5">
-            <span class="input-unit">分</span>
-          </div>
+          <span class="field__label">ふだん使える時間</span>
+          <div class="chip-row" id="chips-default-time"></div>
         </div>
         <div class="field">
           <span class="field__label">鍛えたい部位（筋トレ）</span>

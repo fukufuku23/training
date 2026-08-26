@@ -150,6 +150,7 @@ function palette() {
   return {
     weight: cssVar("--viz-weight", "#2a78d6"),
     calories: cssVar("--viz-calories", "#eb6834"),
+    volume: cssVar("--viz-volume", "#15803D"),
     grid: cssVar("--viz-grid", "#E4E8EF"),
     muted: cssVar("--ink-muted", "#6B7280"),
     surface: cssVar("--surface", "#FFFFFF"),
@@ -329,5 +330,83 @@ export function renderCaloriesChart(container, data) {
     const left = Math.min(Math.max(x - 60, 4), plot.width - 124);
     tip.style.left = `${left}px`;
     tip.style.top = `${pad.top}px`;
+  });
+}
+
+
+/* ---------------- 部位バランス：横棒（単色） ---------------- */
+
+/**
+ * items: [{ label, value }] （呼び出し側で降順ソート済み）
+ *
+ * ドーナツではなく横棒にしている理由:
+ *  - 部位ごとの「量の比較」が仕事なので、角度より長さのほうが正確に読める
+ *  - 単色（順序尺度）で済むため、カテゴリ配色のCVD問題が原理的に起きない
+ *  - 部位名が長くても横に置けるので、モバイルでも省略せずに出せる
+ */
+export function renderBalanceChart(container, items) {
+  const total = items.reduce((s, d) => s + d.value, 0);
+  if (total === 0) {
+    emptyState(container, "この期間の実施記録がまだありません");
+    return;
+  }
+
+  const colors = palette();
+  container.innerHTML = "";
+  const width = Math.max(240, container.clientWidth || 320);
+  const rowH = 30;
+  const labelW = 62;
+  const valueW = 52;
+  const height = items.length * rowH + 8;
+
+  const svg = el("svg", {
+    width, height, viewBox: `0 0 ${width} ${height}`,
+    role: "img", "aria-label": "部位バランス", class: "chart-svg",
+  });
+  container.appendChild(svg);
+
+  const barMaxW = Math.max(40, width - labelW - valueW - 12);
+  const max = Math.max(...items.map((d) => d.value));
+
+  items.forEach((d, i) => {
+    const cy = i * rowH + rowH / 2 + 4;
+    const barH = Math.min(14, rowH - 14);   // 細いマークを守る
+
+    const label = el("text", {
+      x: labelW - 8, y: cy + 4, "text-anchor": "end",
+      class: "chart-label", fill: colors.muted,
+    });
+    label.textContent = d.label;
+    svg.appendChild(label);
+
+    // トラック（背景）— 全体に対する比率が掴めるように
+    svg.appendChild(el("rect", {
+      x: labelW, y: cy - barH / 2, width: barMaxW, height: barH,
+      rx: barH / 2, fill: colors.grid,
+    }));
+
+    const w = Math.max(barH, (d.value / max) * barMaxW);
+    const r = Math.min(4, barH / 2);
+    // 左端（ベースライン側）は直角、右端（データ端）だけ角丸
+    const x = labelW;
+    const y = cy - barH / 2;
+    svg.appendChild(el("path", {
+      d: `M${x} ${y} L${x + w - r} ${y} Q${x + w} ${y} ${x + w} ${y + r} ` +
+         `L${x + w} ${y + barH - r} Q${x + w} ${y + barH} ${x + w - r} ${y + barH} ` +
+         `L${x} ${y + barH} Z`,
+      fill: colors.volume,
+    }));
+
+    // 直接ラベル（件数と割合）
+    const value = el("text", {
+      x: labelW + barMaxW + 8, y: cy + 4, "text-anchor": "start",
+      class: "chart-value", fill: colors.ink,
+    });
+    value.textContent = `${Math.round((d.value / total) * 100)}%`;
+    svg.appendChild(value);
+
+    const title = el("title");
+    title.textContent = `${d.label}: ${d.value}種目（${Math.round((d.value / total) * 100)}%）`;
+    svg.appendChild(title);
   });
 }

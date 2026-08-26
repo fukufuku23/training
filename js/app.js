@@ -1,19 +1,24 @@
 /**
  * 画面制御。ストレージ層（storage.js）とドメインロジック（domain.js）だけに依存する。
  * フェーズ2で storage.js の中身が Supabase 同期付きに変わっても、このファイルは無変更。
+ *
+ * 設計方針:
+ *  - モバイル＝「迷わず始める」。判断を「はじめる」の1つに絞る
+ *  - PC＝「振り返る」。カレンダーと分析
+ *  - 休養日を明示的に肯定する（継続日数を切らさない）
  */
 
 import { EXERCISES } from "./exercises.js";
+import { storage, todayKey, shiftDate, toDateKey, requestPersistence } from "./storage.js";
 import {
-  storage, todayKey, shiftDate, requestPersistence,
-} from "./storage.js";
-import {
-  CONDITIONS, PAIN_REGIONS, PURPOSES,
-  conditionByKey, clampMinutes, estimateDurationMin, calcCalories, adjustedSets,
-  filterExercises, curateForTime, warningFor,
+  CONDITIONS, PAIN_REGIONS, PURPOSES, TIME_PRESETS,
+  conditionByKey, calcCalories, filterExercises, curateForTime, warningFor,
   uniqueCategoriesByType, uniqueEquipment, youtubeUrl, imageSearchUrl,
+  regionGroupOf, summarizeCourse,
 } from "./domain.js";
-import { renderWeightChart, renderCaloriesChart } from "./chart.js";
+import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js";
+
+const EX_BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
 
 const state = {
   exercises: EXERCISES,
@@ -24,9 +29,11 @@ const state = {
   lastTrained: {},
   fallbackWeight: 60,
   loggedToday: new Set(),
+  picked: [],
   historyRange: 30,
-  mediaIndex: null,
+  calMonth: null,      // { y, m }
   bodySide: "front",
+  mediaIndex: null,
   filters: {
     strengthCategory: new Set(),
     stretchCategory: new Set(),
@@ -36,6 +43,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
 
 /* ---------------- 汎用UI ---------------- */
 
@@ -44,8 +52,57 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => toast.classList.remove("show"), 2400);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), 2600);
 }
+
+function svg(paths, attrs = {}) {
+  const s = document.createElementNS(NS, "svg");
+  s.setAttribute("viewBox", attrs.viewBox || "0 0 24 24");
+  s.setAttribute("aria-hidden", "true");
+  paths.forEach((d) => {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", d);
+    s.appendChild(p);
+  });
+  return s;
+}
+
+/* 体調の表情。口の形だけで4段階を表す */
+const FACE_MOUTH = {
+  good: "M8 13.4 Q12 17.2 16 13.4",
+  normal: "M8.6 14.4 Q12 16.2 15.4 14.4",
+  tired: "M8.6 15 L15.4 15",
+  exhausted: "M8 16.2 Q12 13 16 16.2",
+};
+
+function faceSvg(key) {
+  return svg([
+    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
+    "M9.2 10 L9.2 11.4",
+    "M14.8 10 L14.8 11.4",
+    FACE_MOUTH[key] || FACE_MOUTH.normal,
+  ]);
+}
+
+/**
+ * ステップのアイコン（線画）。
+ * ストレッチに「腕を横に広げた人」を使うと、車椅子マークと並ぶ
+ * アクセシビリティのピクトグラムに見えてしまうため、
+ * 「両腕を頭上に伸ばした姿勢」にして意味を明確にしている。
+ */
+const STEP_ICON = {
+  strength: [
+    "M4 10v4", "M20 10v4",
+    "M7.5 7.5v9", "M16.5 7.5v9",
+    "M7.5 12h9",
+  ],
+  stretch: [
+    "M13.7 4.3a1.7 1.7 0 1 1-3.4 0 1.7 1.7 0 0 1 3.4 0z",
+    "M12 7.4v6.2",
+    "M12 8.6 8.7 5.2", "M12 8.6l3.3-3.4",
+    "M12 13.6 9.2 20.2", "M12 13.6l2.8 6.6",
+  ],
+};
 
 function buildMultiChips(containerId, values, activeSet, onToggle, extraClass) {
   const box = $(containerId);
@@ -65,23 +122,21 @@ function buildMultiChips(containerId, values, activeSet, onToggle, extraClass) {
   });
 }
 
-function buildSingleChips(containerId, values, activeGetter, onSelect, extraClass) {
+function buildValueChips(containerId, values, currentGetter, onSelect, format) {
   const box = $(containerId);
   box.innerHTML = "";
   values.forEach((v) => {
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.className = "chip" + (extraClass ? ` ${extraClass}` : "") +
-      (activeGetter() === v ? " is-active" : "");
-    chip.textContent = v;
+    chip.className = "chip" + (currentGetter() === v ? " is-active" : "");
+    chip.textContent = format ? format(v) : String(v);
     chip.addEventListener("click", () => onSelect(v));
     box.appendChild(chip);
   });
 }
 
-/* ---------------- 体重の解決 ---------------- */
+/* ---------------- 体重 ---------------- */
 
-/** 今日の体重 → 直近の記録 → 既定値60kg の順で採用 */
 function effectiveWeight() {
   if (state.log && state.log.weight_kg != null) return state.log.weight_kg;
   return state.fallbackWeight;
@@ -95,93 +150,176 @@ async function loadFallbackWeight() {
   if (withWeight.length > 0) state.fallbackWeight = withWeight[0].weight_kg;
 }
 
-/* ---------------- 統計 ---------------- */
+/* ---------------- 継続日数 ---------------- */
 
-async function refreshStats() {
-  const [streak, yLog] = await Promise.all([
-    storage.getStreak(state.today),
-    storage.getLog(state.yesterday),
-  ]);
-  const todayCal = (state.log.exercises || []).reduce((s, e) => s + (e.calories || 0), 0);
-  const yCal = (yLog.exercises || []).reduce((s, e) => s + (e.calories || 0), 0);
-
-  $("stat-streak").textContent = String(streak);
-  $("stat-today").textContent = String(Math.round(todayCal));
-  $("stat-yesterday").textContent =
-    `${yLog.weight_kg != null ? `${yLog.weight_kg}kg` : "-"} / ${Math.round(yCal)}`;
+async function refreshStreak() {
+  $("stat-streak").textContent = String(await storage.getStreak(state.today));
 }
 
-/* ---------------- 今日のメニュー ---------------- */
+/* ---------------- 今日：コースカード ---------------- */
 
-function renderConditionChips() {
-  buildSingleChips(
-    "chips-condition",
-    CONDITIONS.map((c) => c.label),
-    () => conditionByKey(state.log.condition).label,
-    (label) => {
-      const found = CONDITIONS.find((c) => c.label === label);
-      if (found) state.log.condition = found.key;
-      onConditionOrPainChange();
-    },
-    "chip--condition"
-  );
+function currentMinutes() {
+  return state.log.minutes != null ? state.log.minutes : state.settings.default_minutes;
+}
+
+function renderConditionFaces() {
+  const box = $("chips-condition");
+  box.innerHTML = "";
+  CONDITIONS.forEach((c) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "face" + (state.log.condition === c.key ? " is-active" : "");
+    btn.setAttribute("aria-pressed", state.log.condition === c.key ? "true" : "false");
+    btn.appendChild(faceSvg(c.key));
+    const label = document.createElement("span");
+    label.className = "face__label";
+    label.textContent = c.label;
+    btn.appendChild(label);
+    btn.addEventListener("click", async () => {
+      state.log.condition = c.key;
+      await storage.saveLog(state.today, { condition: c.key });
+      renderConditionFaces();
+      renderToday();
+    });
+    box.appendChild(btn);
+  });
   $("condition-hint").textContent = conditionByKey(state.log.condition).note;
+}
+
+function renderTimeChips() {
+  buildValueChips("chips-time", TIME_PRESETS, currentMinutes, async (v) => {
+    state.log.minutes = v;
+    await storage.saveLog(state.today, { minutes: v });
+    renderTimeChips();
+    renderToday();
+  }, (v) => `${v}分`);
 }
 
 function renderPainChips() {
   const set = new Set(state.log.pain_regions || []);
-  buildMultiChips("chips-pain", PAIN_REGIONS, set, () => {
+  buildMultiChips("chips-pain", PAIN_REGIONS, set, async () => {
     state.log.pain_regions = Array.from(set);
-    onConditionOrPainChange();
+    await storage.saveLog(state.today, { pain_regions: state.log.pain_regions });
+    renderPainChips();
+    syncBodyMapSelection();
+    renderToday();
   }, "chip--pain");
 }
 
-async function onConditionOrPainChange() {
-  renderConditionChips();
-  renderPainChips();
-  syncBodyMapSelection();
-  await storage.saveLog(state.today, {
-    condition: state.log.condition,
-    pain_regions: state.log.pain_regions,
-    minutes: state.log.minutes,
-  });
-  renderCards();
-}
-
-function currentMinutes() {
-  return state.log.minutes != null
-    ? state.log.minutes
-    : state.settings.default_minutes;
-}
-
-function renderCards() {
+/** 今日のメニューを組み立てて、コースカードとカードリストを更新する */
+function renderToday() {
+  const card = $("course-card");
+  const startBtn = $("start-btn");
+  const restBtn = $("rest-btn");
   const list = $("card-list");
-  const summary = $("menu-summary");
+
+  // --- 休養日 ---
+  if (state.log.rest) {
+    card.classList.add("is-rest");
+    $("course-title").textContent = "休養日";
+    $("course-sub").textContent = "しっかり休むのもトレーニングのうちです。継続日数は途切れません。";
+    $("course-steps").innerHTML = "";
+    $("course-progress").style.width = "100%";
+    $("course-progress-label").textContent = "休養";
+    startBtn.disabled = true;
+    startBtn.textContent = "今日はお休み";
+    restBtn.textContent = "やっぱり運動する";
+    restBtn.classList.add("is-on");
+    list.innerHTML = "";
+    $("menu-summary").textContent = "";
+    return;
+  }
+
+  card.classList.remove("is-rest");
+  startBtn.disabled = false;
+  restBtn.textContent = "今日は休養日にする";
+  restBtn.classList.remove("is-on");
+
   const filtered = filterExercises(state.exercises, {
     ...state.filters,
     painRegions: state.log.pain_regions || [],
     conditionKey: state.log.condition,
   });
-  const { picked, totalMin } = curateForTime(
-    filtered, currentMinutes(), state.log.condition
-  );
+  const { picked, totalMin } = curateForTime(filtered, currentMinutes(), state.log.condition);
+  state.picked = picked;
 
-  list.innerHTML = "";
+  // 設定時間ではなく「実際に組めた時間」を出す。
+  // 体調が悪い日はセット数が減って短くなるので、設定値を出すと嘘になる。
+  $("course-title").textContent = picked.length
+    ? `${Math.round(totalMin)}分コース`
+    : "メニューなし";
+
+  const steps = summarizeCourse(picked);
+  const stepsBox = $("course-steps");
+  stepsBox.innerHTML = "";
+  steps.forEach((s, i) => {
+    if (i > 0) {
+      const arrow = document.createElement("li");
+      arrow.className = "step__arrow";
+      arrow.textContent = "→";
+      arrow.setAttribute("aria-hidden", "true");
+      stepsBox.appendChild(arrow);
+    }
+    const li = document.createElement("li");
+    li.className = `step step--${s.key}`;
+    const icon = document.createElement("span");
+    icon.className = "step__icon";
+    icon.appendChild(svg(STEP_ICON[s.key]));
+    li.appendChild(icon);
+    const label = document.createElement("span");
+    label.className = "step__label";
+    label.textContent = s.label;
+    li.appendChild(label);
+    const meta = document.createElement("span");
+    meta.className = "step__meta";
+    meta.textContent = `${s.count}種目 ・ ${s.minutes}分`;
+    li.appendChild(meta);
+    stepsBox.appendChild(li);
+  });
+
+  const done = picked.filter((p) => state.loggedToday.has(p.ex.id)).length;
+  const pct = picked.length ? Math.round((done / picked.length) * 100) : 0;
+  $("course-progress").style.width = `${pct}%`;
+  $("course-progress-label").textContent = `${done} / ${picked.length} 完了`;
+
   if (picked.length === 0) {
+    $("course-sub").textContent = filtered.length === 0
+      ? "条件に合う種目がありません。設定を見直してください。"
+      : "時間が短すぎます。使える時間を増やしてください。";
+    startBtn.disabled = true;
+  } else if (done === 0) {
+    $("course-sub").textContent = conditionByKey(state.log.condition).note;
+    startBtn.textContent = "はじめる";
+  } else if (done < picked.length) {
+    $("course-sub").textContent = `あと ${picked.length - done} 種目です。`;
+    startBtn.textContent = "つづきから";
+  } else {
+    $("course-sub").textContent = "今日のメニューを完了しました。おつかれさまでした。";
+    startBtn.textContent = "完了";
+    startBtn.disabled = true;
+  }
+
+  renderCards();
+}
+
+function renderCards() {
+  const list = $("card-list");
+  const picked = state.picked;
+  list.innerHTML = "";
+
+  if (picked.length === 0) {
+    $("menu-summary").textContent = "";
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = filtered.length === 0
-      ? "条件に合う種目がありません。設定タブで絞り込みを見直してください。"
-      : "設定時間が短すぎて表示できる種目がありません。時間を増やしてみてください。";
+    empty.textContent = "条件に合う種目がありません。設定タブで絞り込みを見直してください。";
     list.appendChild(empty);
-    summary.textContent = "";
     return;
   }
 
   const weight = effectiveWeight();
   const totalCal = picked.reduce((s, p) => s + calcCalories(p.ex, weight, p.sets), 0);
-  summary.textContent =
-    `厳選 ${picked.length}種目 ・ 合計 約${Math.round(totalMin)}分 ・ 約${Math.round(totalCal)}kcal`;
+  $("menu-summary").textContent =
+    `全${picked.length}種目 ・ 想定 約${Math.round(totalCal)}kcal`;
 
   const frag = document.createDocumentFragment();
   picked.forEach(({ ex, sets, durationMin }) => {
@@ -191,8 +329,6 @@ function renderCards() {
 }
 
 function buildMediaSlot(ex) {
-  // media/index.json に載っている種目だけ画像を出す。
-  // マニフェストが無ければ画像は一切要求しない（196件分の404を防ぐ）。
   if (!state.mediaIndex || !state.mediaIndex.has(ex.id)) return null;
   const img = document.createElement("img");
   img.className = "card__media-img";
@@ -203,18 +339,17 @@ function buildMediaSlot(ex) {
   return img;
 }
 
-/**
- * 画像を追加したら media/index.json を置く（種目IDの配列）。
- *   ["chest_01", "back_03"]
- * ファイルが無ければ画像機能は自動的に無効になる。
- */
 async function loadMediaIndex() {
   try {
     const res = await fetch("media/index.json", { cache: "no-cache" });
     if (!res.ok) return;
     const ids = await res.json();
     if (Array.isArray(ids)) state.mediaIndex = new Set(ids);
-  } catch (_) { /* 未配置なら何もしない */ }
+  } catch (_) { /* 未配置なら画像機能は無効のまま */ }
+}
+
+function checkSvg() {
+  return svg(["M5 12.5 L10 17 L19 7.5"]);
 }
 
 function buildCard(ex, sets, durationMin, weight) {
@@ -232,27 +367,27 @@ function buildCard(ex, sets, durationMin, weight) {
     : (setsChanged ? `${ex.default_sets}→${sets}セット` : `${sets}セット`);
 
   card.innerHTML = `
-    <div class="${done ? "stamp stamp--static" : "stamp"}">済</div>
+    <div class="${done ? "stamp stamp--static" : "stamp"}"></div>
     <div class="card__info">
       <div class="card__name-row">
         <span class="card__name"></span>
         ${warnText ? `<span class="card__warn">${warnText}</span>` : ""}
       </div>
-      <div class="card__meta">部位 ${ex.category} ・ 道具 ${ex.equipment}</div>
+      <div class="card__meta">${ex.category} ・ 道具 ${ex.equipment}</div>
       <div class="card__meta">${setsLabel} ・ 約${Math.round(durationMin)}分</div>
-      <div class="card__chip">想定消費 ${calories} kcal</div>
+      <div class="card__chip">想定 ${calories} kcal</div>
       ${ex.source ? `<div class="card__source">出典 ${ex.source}</div>` : ""}
     </div>
     <div class="card__actions">
       <button class="btn btn--outline btn-video" type="button">動画</button>
       <button class="btn btn--outline btn-image" type="button">画像</button>
-      <button class="btn btn--stamp btn-done" type="button" ${done ? "disabled" : ""}>
+      <button class="btn btn--done btn-done" type="button" ${done ? "disabled" : ""}>
         ${done ? "記録済み" : "完了"}
       </button>
     </div>
   `;
-  // 種目名はテキストとして設定（HTMLとして解釈させない）
   card.querySelector(".card__name").textContent = ex.name;
+  card.querySelector(".stamp").appendChild(checkSvg());
   const media = buildMediaSlot(ex);
   if (media) card.querySelector(".card__info").prepend(media);
 
@@ -277,10 +412,25 @@ async function handleLogDone(ex, calories, cardEl, buttonEl) {
     });
     state.loggedToday.add(ex.id);
     cardEl.classList.add("is-done");
+    cardEl.classList.remove("is-next");
     buttonEl.textContent = "記録済み";
     cardEl.querySelector(".stamp").classList.add("show");
-    await refreshStats();
-    showToast(`「${ex.name}」を記録しました（+${calories}kcal）`);
+
+    // 進捗だけ更新する（カードを作り直すとスタンプの演出が消えるため）
+    const done = state.picked.filter((p) => state.loggedToday.has(p.ex.id)).length;
+    const pct = state.picked.length ? Math.round((done / state.picked.length) * 100) : 0;
+    $("course-progress").style.width = `${pct}%`;
+    $("course-progress-label").textContent = `${done} / ${state.picked.length} 完了`;
+    if (done === state.picked.length) {
+      $("course-sub").textContent = "今日のメニューを完了しました。おつかれさまでした。";
+      $("start-btn").textContent = "完了";
+      $("start-btn").disabled = true;
+      showToast("今日のメニューを完了しました");
+    } else {
+      $("course-sub").textContent = `あと ${state.picked.length - done} 種目です。`;
+      $("start-btn").textContent = "つづきから";
+    }
+    await refreshStreak();
   } catch (err) {
     buttonEl.disabled = false;
     showToast("記録に失敗しました。もう一度お試しください。");
@@ -288,7 +438,33 @@ async function handleLogDone(ex, calories, cardEl, buttonEl) {
   }
 }
 
-/* ---------------- 体重入力 ---------------- */
+/** 「はじめる」= 次にやる種目まで運んで強調するだけ。判断を増やさない */
+function setupStartButton() {
+  $("start-btn").addEventListener("click", () => {
+    const next = state.picked.find((p) => !state.loggedToday.has(p.ex.id));
+    if (!next) return;
+    const el = document.querySelector(`.card[data-id="${next.ex.id}"]`);
+    if (!el) return;
+    document.querySelectorAll(".card.is-next").forEach((c) => c.classList.remove("is-next"));
+    el.classList.add("is-next");
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+function setupRestButton() {
+  $("rest-btn").addEventListener("click", async () => {
+    if (!state.log.rest && state.loggedToday.size > 0) {
+      showToast("すでに記録があるため休養日にできません");
+      return;
+    }
+    state.log = await storage.setRest(state.today, !state.log.rest);
+    await refreshStreak();
+    renderToday();
+    showToast(state.log.rest
+      ? "休養日にしました。継続日数は途切れません"
+      : "休養日を取り消しました");
+  });
+}
 
 function setupWeightInput() {
   const input = $("weight-input");
@@ -303,46 +479,30 @@ function setupWeightInput() {
     }
     state.log = await storage.saveLog(state.today, { weight_kg: value });
     state.fallbackWeight = value;
-    await refreshStats();
-    renderCards();
+    renderToday();
     showToast("体重を保存しました");
   });
 }
 
-/* ---------------- 時間入力 ---------------- */
-
-function setupTimeInputs() {
-  const todayInput = $("today-time-input");
-  todayInput.value = currentMinutes();
-  todayInput.addEventListener("change", async () => {
-    const v = clampMinutes(todayInput.value, currentMinutes());
-    todayInput.value = v;
-    state.log.minutes = v;
-    await storage.saveLog(state.today, { minutes: v });
-    renderCards();
-  });
-
-  const settingsInput = $("settings-time-input");
-  settingsInput.value = state.settings.default_minutes;
-  settingsInput.addEventListener("change", async () => {
-    const v = clampMinutes(settingsInput.value, state.settings.default_minutes);
-    settingsInput.value = v;
-    state.settings.default_minutes = v;
-    await persistSettings();
-  });
-}
-
-/* ---------------- 設定タブ ---------------- */
+/* ---------------- 設定 ---------------- */
 
 function renderSettingsFilters() {
+  buildValueChips("chips-default-time", TIME_PRESETS,
+    () => state.settings.default_minutes, async (v) => {
+      state.settings.default_minutes = v;
+      await persistSettings();
+      renderSettingsFilters();
+      renderTimeChips();
+      renderToday();
+    }, (v) => `${v}分`);
+
   buildMultiChips("chips-strength-category",
     uniqueCategoriesByType(state.exercises, "strength"),
     state.filters.strengthCategory, onSettingsChange);
   buildMultiChips("chips-stretch-category",
     uniqueCategoriesByType(state.exercises, "stretch"),
     state.filters.stretchCategory, onSettingsChange);
-  buildMultiChips("chips-purpose", PURPOSES,
-    state.filters.purpose, onSettingsChange);
+  buildMultiChips("chips-purpose", PURPOSES, state.filters.purpose, onSettingsChange);
   buildMultiChips("chips-equipment", uniqueEquipment(state.exercises),
     state.filters.equipment, onSettingsChange);
 }
@@ -350,7 +510,7 @@ function renderSettingsFilters() {
 async function onSettingsChange() {
   renderSettingsFilters();
   await persistSettings();
-  renderCards();
+  renderToday();
 }
 
 async function persistSettings() {
@@ -379,9 +539,9 @@ function setupBodyMap() {
     modal.classList.remove("is-open");
     modal.setAttribute("aria-hidden", "true");
     hint.textContent = "部位をタップして選択してください";
-    renderPainChips();
     await storage.saveLog(state.today, { pain_regions: state.log.pain_regions });
-    renderCards();
+    renderPainChips();
+    renderToday();
   }
 
   $("close-body-map-btn").addEventListener("click", close);
@@ -421,7 +581,108 @@ function syncBodyMapSelection() {
     : `選択中: ${Array.from(set).join("・")}`;
 }
 
-/* ---------------- 記録タブ ---------------- */
+/* ---------------- 記録：カレンダー ---------------- */
+
+const DOW = ["日", "月", "火", "水", "木", "金", "土"];
+
+async function renderCalendar() {
+  const { y, m } = state.calMonth;
+  $("cal-title").textContent = `${y}年${m + 1}月`;
+
+  const last = new Date(y, m + 1, 0);
+  const from = toDateKey(new Date(y, m, 1));
+  const to = toDateKey(last);
+  const logs = await storage.getLogs(from, to);
+  const byDate = new Map(logs.map((l) => [l.date, l]));
+
+  const box = $("calendar");
+  box.innerHTML = "";
+
+  DOW.forEach((d, i) => {
+    const h = document.createElement("div");
+    h.className = "cal__dow" + (i === 0 ? " cal__dow--sun" : i === 6 ? " cal__dow--sat" : "");
+    h.textContent = d;
+    box.appendChild(h);
+  });
+
+  const startDow = new Date(y, m, 1).getDay();
+  for (let i = 0; i < startDow; i++) {
+    const pad = document.createElement("div");
+    pad.className = "cal__day cal__day--pad";
+    box.appendChild(pad);
+  }
+
+  let trained = 0, rested = 0, calories = 0, weight = null;
+
+  for (let d = 1; d <= last.getDate(); d++) {
+    const key = toDateKey(new Date(y, m, d));
+    const log = byDate.get(key);
+    const cell = document.createElement("div");
+    cell.className = "cal__day" + (key === state.today ? " cal__day--today" : "");
+
+    const num = document.createElement("span");
+    num.className = "cal__num";
+    num.textContent = String(d);
+    cell.appendChild(num);
+
+    const dots = document.createElement("span");
+    dots.className = "cal__dots";
+    const marks = [];
+
+    if (log) {
+      const ex = log.exercises || [];
+      if (ex.length > 0) {
+        trained++;
+        calories += ex.reduce((s, e) => s + (e.calories || 0), 0);
+        const types = new Set(ex.map((e) => (EX_BY_ID.get(e.id) || {}).type));
+        if (types.has("strength")) marks.push("strength");
+        if (types.has("stretch")) marks.push("stretch");
+      } else if (log.rest) {
+        rested++;
+        marks.push("rest");
+      }
+      if (log.pain_regions && log.pain_regions.length > 0) marks.push("pain");
+      if (log.weight_kg != null) weight = log.weight_kg;
+    }
+
+    marks.forEach((mk) => {
+      const dot = document.createElement("i");
+      dot.className = `dot dot--${mk}`;
+      dots.appendChild(dot);
+    });
+    cell.appendChild(dots);
+
+    const labels = { strength: "筋トレ", stretch: "ストレッチ", rest: "休養日", pain: "痛みあり" };
+    cell.title = `${y}/${m + 1}/${d}` +
+      (marks.length ? ` — ${marks.map((k) => labels[k]).join("・")}` : " — 記録なし");
+    box.appendChild(cell);
+  }
+
+  renderKpi({ trained, rested, calories, weight, days: last.getDate() });
+}
+
+function renderKpi({ trained, rested, calories, weight }) {
+  const row = $("kpi-row");
+  row.innerHTML = "";
+  const items = [
+    { label: "実施した日", value: trained, sub: "日" },
+    { label: "休養日", value: rested, sub: "日" },
+    { label: "消費カロリー", value: Math.round(calories).toLocaleString(), sub: "kcal" },
+    { label: "体重（最新）", value: weight != null ? weight : "—", sub: weight != null ? "kg" : "" },
+  ];
+  items.forEach((it) => {
+    const box = document.createElement("div");
+    box.className = "kpi";
+    box.innerHTML = `<div class="kpi__label"></div>
+      <div class="kpi__value"></div><div class="kpi__sub"></div>`;
+    box.querySelector(".kpi__label").textContent = it.label;
+    box.querySelector(".kpi__value").textContent = String(it.value);
+    box.querySelector(".kpi__sub").textContent = it.sub;
+    row.appendChild(box);
+  });
+}
+
+/* ---------------- 記録：グラフと履歴 ---------------- */
 
 const RANGES = [
   { label: "2週間", days: 14 },
@@ -430,52 +691,88 @@ const RANGES = [
 ];
 
 function renderRangeChips() {
-  buildSingleChips(
-    "chips-range",
-    RANGES.map((r) => r.label),
-    () => (RANGES.find((r) => r.days === state.historyRange) || {}).label,
-    (label) => {
-      const found = RANGES.find((r) => r.label === label);
-      if (found) state.historyRange = found.days;
+  buildValueChips("chips-range", RANGES.map((r) => r.days),
+    () => state.historyRange, (days) => {
+      state.historyRange = days;
       renderRangeChips();
-      renderHistory();
-    }
-  );
+      renderCharts();
+    }, (days) => (RANGES.find((r) => r.days === days) || {}).label);
 }
 
-async function renderHistory() {
+async function renderCharts() {
   const data = await storage.getHistory(state.historyRange, state.today);
   renderWeightChart($("chart-weight"), data);
   renderCaloriesChart($("chart-calories"), data);
 
+  // 部位バランス：期間内の実施種目をグループ単位で集計
+  const logs = await storage.getLogs(data[0].date, data[data.length - 1].date);
+  const counts = new Map();
+  logs.forEach((l) => {
+    (l.exercises || []).forEach((e) => {
+      const ex = EX_BY_ID.get(e.id);
+      if (!ex) return;
+      const g = regionGroupOf(ex.category);
+      counts.set(g, (counts.get(g) || 0) + 1);
+    });
+  });
+  const items = Array.from(counts, ([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+  renderBalanceChart($("chart-balance"), items);
+
+  renderHistoryList(logs);
+}
+
+function renderHistoryList(logs) {
   const list = $("history-list");
-  const done = data.filter((d) => d.count > 0).reverse();
-  if (done.length === 0) {
-    list.innerHTML = `<p class="chart-empty">この期間の実施記録はまだありません</p>`;
+  const rows = logs
+    .filter((l) => (l.exercises || []).length > 0 || l.rest)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  list.innerHTML = "";
+  if (rows.length === 0) {
+    list.innerHTML = `<p class="chart-empty">この期間の記録はまだありません</p>`;
     return;
   }
 
-  const logs = await storage.getLogs(data[0].date, data[data.length - 1].date);
-  const byDate = new Map(logs.map((l) => [l.date, l]));
-
-  list.innerHTML = "";
-  done.forEach((d) => {
-    const log = byDate.get(d.date);
+  rows.forEach((l) => {
+    const ex = l.exercises || [];
+    const cal = ex.reduce((s, e) => s + (e.calories || 0), 0);
     const item = document.createElement("div");
-    item.className = "history-item";
-    const names = (log.exercises || []).map((e) => e.name).join("・");
+    item.className = "history-item" + (ex.length === 0 ? " history-item--rest" : "");
     item.innerHTML = `
       <div class="history-item__head">
         <span class="history-item__date"></span>
-        <span class="history-item__nums">${Math.round(d.calories)} kcal ・ ${d.count}種目${
-          d.weight != null ? ` ・ ${d.weight}kg` : ""
-        }</span>
+        <span class="history-item__nums"></span>
       </div>
       <div class="history-item__names"></div>
     `;
-    item.querySelector(".history-item__date").textContent = d.date;
-    item.querySelector(".history-item__names").textContent = names;
+    item.querySelector(".history-item__date").textContent = l.date;
+    item.querySelector(".history-item__nums").textContent = ex.length === 0
+      ? "休養日"
+      : `${Math.round(cal)} kcal ・ ${ex.length}種目` +
+        (l.weight_kg != null ? ` ・ ${l.weight_kg}kg` : "");
+    item.querySelector(".history-item__names").textContent = ex.length === 0
+      ? "しっかり休みました"
+      : ex.map((e) => e.name).join("・");
     list.appendChild(item);
+  });
+}
+
+function setupCalendarNav() {
+  $("cal-prev").addEventListener("click", () => {
+    const d = new Date(state.calMonth.y, state.calMonth.m - 1, 1);
+    state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
+    renderCalendar();
+  });
+  $("cal-next").addEventListener("click", () => {
+    const d = new Date(state.calMonth.y, state.calMonth.m + 1, 1);
+    state.calMonth = { y: d.getFullYear(), m: d.getMonth() };
+    renderCalendar();
+  });
+  $("cal-today").addEventListener("click", () => {
+    const now = new Date();
+    state.calMonth = { y: now.getFullYear(), m: now.getMonth() };
+    renderCalendar();
   });
 }
 
@@ -484,9 +781,7 @@ async function renderHistory() {
 function setupDataTools() {
   $("export-btn").addEventListener("click", async () => {
     const payload = await storage.exportAll();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: "application/json",
-    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -543,7 +838,7 @@ function setupNav() {
       document.querySelectorAll(".view")
         .forEach((v) => v.classList.toggle("is-active", v.id === `view-${view}`));
       window.scrollTo({ top: 0, behavior: "instant" });
-      if (view === "history") renderHistory();
+      if (view === "history") { renderCalendar(); renderCharts(); }
     });
   });
 }
@@ -552,7 +847,7 @@ let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if ($("view-history").classList.contains("is-active")) renderHistory();
+    if ($("view-history").classList.contains("is-active")) renderCharts();
   }, 200);
 });
 
@@ -572,26 +867,31 @@ async function init() {
   state.filters.purpose = new Set(settings.purposes);
   state.filters.equipment = new Set(settings.equipment);
 
+  const now = new Date();
+  state.calMonth = { y: now.getFullYear(), m: now.getMonth() };
+
   await Promise.all([loadFallbackWeight(), loadMediaIndex()]);
   state.lastTrained = await storage.getLastTrainedMap(state.today);
 
   setupNav();
+  setupStartButton();
+  setupRestButton();
   setupWeightInput();
-  setupTimeInputs();
   setupBodyMap();
+  setupCalendarNav();
   setupDataTools();
 
-  renderSettingsFilters();
-  renderConditionChips();
+  renderConditionFaces();
+  renderTimeChips();
   renderPainChips();
   syncBodyMapSelection();
+  renderSettingsFilters();
   renderRangeChips();
-  renderCards();
+  renderToday();
 
-  await refreshStats();
+  await refreshStreak();
   renderStorageInfo();
 
-  // iOS のストレージ削除対策（ホーム画面追加時に許可されやすい）
   requestPersistence().then(() => renderStorageInfo());
 
   if ("serviceWorker" in navigator) {

@@ -93,6 +93,7 @@ export function emptyLog(date) {
     condition: "normal",
     pain_regions: [],
     minutes: null,
+    rest: false,     // 「今日は休養日」と本人が宣言した日
     exercises: [],   // { id, name, calories, at }
     updated_at: null,
   };
@@ -152,6 +153,13 @@ export const storage = {
     return next;
   },
 
+  /** 休養日フラグの切り替え。実施記録がある日は休養日にできない */
+  async setRest(date, isRest) {
+    const log = await this.getLog(date);
+    if (isRest && log.exercises && log.exercises.length > 0) return log;
+    return this.saveLog(date, { rest: !!isRest });
+  },
+
   async removeExercise(date, exerciseId) {
     const log = await this.getLog(date);
     const next = {
@@ -164,13 +172,21 @@ export const storage = {
   },
 
   /**
-   * 連続実施日数。db.py の get_streak と同じ挙動：
-   * 今日まだ実施していなければ昨日を起点に遡る。
+   * 継続日数。
+   *
+   * 「実施した日」だけでなく「休養日と宣言した日」も継続として数える。
+   * 連続記録が途切れる恐怖で無理をさせない／体調が悪い日に休むことを
+   * 否定しない、というこのアプリの方針をここで表現している。
+   * 何も記録しなかった日だけが継続を切る。
+   *
+   * 今日まだ何もしていなければ昨日を起点に遡る（今日はこれからかもしれない）。
    */
   async getStreak(today = todayKey()) {
     const logs = await this.getAllLogs();
     const done = new Set(
-      logs.filter((l) => l.exercises && l.exercises.length > 0).map((l) => l.date)
+      logs
+        .filter((l) => (l.exercises && l.exercises.length > 0) || l.rest === true)
+        .map((l) => l.date)
     );
     if (done.size === 0) return 0;
     let cursor = done.has(today) ? today : shiftDate(today, -1);
@@ -209,6 +225,8 @@ export const storage = {
         weight: row && row.weight_kg != null ? row.weight_kg : null,
         calories: row ? (row.exercises || []).reduce((s, e) => s + (e.calories || 0), 0) : 0,
         count: row ? (row.exercises || []).length : 0,
+        rest: !!(row && row.rest),
+        pain: !!(row && row.pain_regions && row.pain_regions.length > 0),
       });
     }
     return out;

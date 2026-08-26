@@ -6,20 +6,75 @@
 export const REST_SEC_STRENGTH = 45;
 export const SEC_PER_REP = 3;
 export const MIN_MINUTES = 10;
+/** 種目の切り替え・準備にかかる実時間。合計時間の見積もりに含める */
+export const TRANSITION_MIN = 0.5;
+/**
+ * 1回のメニューに入れる種目数の上限。
+ * 固定値にすると、短い日は多すぎ・長い日は時間が余る。時間に比例させる。
+ * 多すぎると「迷わず始める」が壊れるので上限16で頭打ちにする。
+ */
+export function maxPicksFor(minutes) {
+  return Math.min(16, Math.max(4, Math.round(minutes / 3.5)));
+}
 export const MAX_MINUTES = 120;
 
 export const PURPOSES = ["筋肥大", "筋力向上", "引き締め", "柔軟性向上"];
 
 export const CONDITIONS = [
-  { key: "good", label: "絶好調", setsDelta: 1, lightOnly: false,
+  { key: "good", label: "絶好調", face: "◕‿◕", setsDelta: 1, lightOnly: false,
     note: "いつもより少し多めの負荷にします。" },
-  { key: "normal", label: "普通", setsDelta: 0, lightOnly: false,
+  { key: "normal", label: "普通", face: "•‿•", setsDelta: 0, lightOnly: false,
     note: "通常メニューです。" },
-  { key: "tired", label: "やや疲れ気味", setsDelta: -1, lightOnly: false,
+  { key: "tired", label: "やや疲れ", face: "•︵•", setsDelta: -1, lightOnly: false,
     note: "セット数を少し減らして負荷を下げます。" },
-  { key: "exhausted", label: "お疲れ気味", setsDelta: -2, lightOnly: true,
+  { key: "exhausted", label: "お疲れ", face: "×︵×", setsDelta: -2, lightOnly: true,
     note: "毎日OKな軽めの種目・ストレッチ中心にしぼります。" },
 ];
+
+/** 時間選択の候補（数値入力よりチップのほうが片手で選びやすい） */
+export const TIME_PRESETS = [10, 15, 20, 30, 45, 60];
+
+/**
+ * 部位バランス用のグループ分け。
+ * 種目カテゴリは細かいので、振り返るときに意味のある粒度へ丸める。
+ */
+export const REGION_GROUPS = ["胸", "背中", "脚", "肩・首", "腕", "体幹", "全身"];
+
+export function regionGroupOf(category) {
+  const c = String(category || "");
+  if (c.includes("全身")) return "全身";
+  if (c.includes("胸")) return "胸";
+  if (c.includes("背中")) return "背中";
+  if (c.includes("腹")) return "体幹";
+  if (c.includes("腕")) return "腕";
+  if (c.includes("肩") || c.includes("首")) return "肩・首";
+  if (c.includes("脚") || c.includes("もも") || c.includes("ふくらはぎ")
+      || c.includes("股関節") || c.includes("お尻") || c.includes("足首")) return "脚";
+  return "全身";
+}
+
+/**
+ * 厳選結果を「◯分コース」の見出し用に要約する。
+ * 種目リストを見る前に、今日やることの全体像を1行で掴めるようにする。
+ */
+export function summarizeCourse(picked) {
+  const strength = picked.filter((p) => p.ex.type === "strength");
+  const stretch = picked.filter((p) => p.ex.type === "stretch");
+  const steps = [];
+  if (strength.length) {
+    steps.push({
+      key: "strength", label: "筋トレ", count: strength.length,
+      minutes: Math.round(strength.reduce((s, p) => s + p.durationMin, 0)),
+    });
+  }
+  if (stretch.length) {
+    steps.push({
+      key: "stretch", label: "ストレッチ", count: stretch.length,
+      minutes: Math.round(stretch.reduce((s, p) => s + p.durationMin, 0)),
+    });
+  }
+  return steps;
+}
 
 export const PAIN_REGIONS = [
   "首", "肩", "胸", "二の腕", "前腕", "背中", "腰",
@@ -132,7 +187,14 @@ export function filterExercises(exercises, opts) {
 
 /**
  * 設定時間に収まるようカテゴリ横断でバランスよく厳選する。
- * カテゴリごとに順番に1種目ずつ拾い、合計時間が上限を超えない限り続ける。
+ *
+ * 設計上の要点が3つある。
+ *  1. 筋トレとストレッチのカテゴリを交互に並べる。
+ *     単純にカテゴリ順で回すと、1種目5分の筋トレが先に時間を使い切って
+ *     ストレッチが1つも入らない（＝コースが1ステップになる）
+ *  2. 種目の切り替え時間（TRANSITION_MIN）を見積もりに含める。
+ *     含めないとストレッチが極端に安く見え、何十種目も詰め込まれる
+ *  3. 種目数の上限を時間に比例させる。固定値だと短い日は多すぎ、長い日は余る
  */
 export function curateForTime(list, minutes, conditionKey) {
   const byCategory = new Map();
@@ -140,16 +202,29 @@ export function curateForTime(list, minutes, conditionKey) {
     if (!byCategory.has(ex.category)) byCategory.set(ex.category, []);
     byCategory.get(ex.category).push(ex);
   });
-  const categories = Array.from(byCategory.keys());
-  const cursors = new Map(categories.map((c) => [c, 0]));
 
+  // 筋トレ系とストレッチ系のカテゴリを交互に並べ替える
+  const strengthCats = [];
+  const stretchCats = [];
+  for (const [cat, arr] of byCategory) {
+    (arr[0].type === "stretch" ? stretchCats : strengthCats).push(cat);
+  }
+  const categories = [];
+  for (let i = 0; i < Math.max(strengthCats.length, stretchCats.length); i++) {
+    if (i < strengthCats.length) categories.push(strengthCats[i]);
+    if (i < stretchCats.length) categories.push(stretchCats[i]);
+  }
+
+  const cursors = new Map(categories.map((c) => [c, 0]));
+  const maxPicks = maxPicksFor(minutes);
   const picked = [];
   let totalMin = 0;
   let addedAny = true;
 
-  while (addedAny) {
+  while (addedAny && picked.length < maxPicks) {
     addedAny = false;
     for (const cat of categories) {
+      if (picked.length >= maxPicks) break;
       const arr = byCategory.get(cat);
       const idx = cursors.get(cat);
       if (idx >= arr.length) continue;
@@ -157,9 +232,10 @@ export function curateForTime(list, minutes, conditionKey) {
       cursors.set(cat, idx + 1);
       const sets = adjustedSets(ex, conditionKey);
       const durationMin = estimateDurationMin(ex, sets);
-      if (totalMin + durationMin <= minutes) {
+      const slotMin = durationMin + TRANSITION_MIN;
+      if (totalMin + slotMin <= minutes) {
         picked.push({ ex, sets, durationMin });
-        totalMin += durationMin;
+        totalMin += slotMin;
         addedAny = true;
       }
     }
