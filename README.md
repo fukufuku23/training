@@ -156,19 +156,15 @@ logs/{YYYY-MM-DD}     体重・コンディション・痛い部位・実施種�
 
 ### 種目マスタを更新したら
 
-`../data/build_exercises.py` を編集して再生成したあと、JSモジュールに変換する。
+`js/exercises.js` を直接編集しないこと。`../data/build_exercises.py` が生成している。
 
 ```
-python - <<'PY'
-import json, io
-d = json.load(open('data/exercises.json', encoding='utf-8'))
-out = io.StringIO()
-out.write("export const EXERCISES = ")
-json.dump(d, out, ensure_ascii=False, separators=(',', ':'))
-out.write(";\n")
-open('pwa/js/exercises.js', 'w', encoding='utf-8').write(out.getvalue())
-PY
+cd ../data
+python build_exercises.py
 ```
+
+これ1回で `data/exercises.json` / `data/media_reference.md` / `pwa/js/exercises.js`
+の3つが更新される。あとは commit して push すれば公開版に反映される。
 
 ### 種目の画像を追加する
 
@@ -180,6 +176,7 @@ PY
 
 `media/index.json` が無ければ画像機能は自動的に無効になる（196件分の
 無駄なリクエストを避けるため、マニフェスト方式にしてある）。
+種目IDの一覧は `../data/media_reference.md` を参照。
 
 ## データの持ち出し
 
