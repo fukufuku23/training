@@ -53,29 +53,6 @@ export function regionGroupOf(category) {
   return "全身";
 }
 
-/**
- * 厳選結果を「◯分コース」の見出し用に要約する。
- * 種目リストを見る前に、今日やることの全体像を1行で掴めるようにする。
- */
-export function summarizeCourse(picked) {
-  const strength = picked.filter((p) => p.ex.type === "strength");
-  const stretch = picked.filter((p) => p.ex.type === "stretch");
-  const steps = [];
-  if (strength.length) {
-    steps.push({
-      key: "strength", label: "筋トレ", count: strength.length,
-      minutes: Math.round(strength.reduce((s, p) => s + p.durationMin, 0)),
-    });
-  }
-  if (stretch.length) {
-    steps.push({
-      key: "stretch", label: "ストレッチ", count: stretch.length,
-      minutes: Math.round(stretch.reduce((s, p) => s + p.durationMin, 0)),
-    });
-  }
-  return steps;
-}
-
 export const PAIN_REGIONS = [
   "首", "肩", "胸", "二の腕", "前腕", "背中", "腰",
   "腹部", "お尻", "太もも前", "太もも裏", "膝", "ふくらはぎ", "足首",
@@ -139,6 +116,68 @@ export function adjustedSets(ex, conditionKey) {
   return Math.max(1, base + cond.setsDelta);
 }
 
+/**
+ * 厳選結果を「ウォームアップ → 筋トレ → ストレッチ」の3段構成に組み直す。
+ *
+ * 単なる見た目の演出ではない。カテゴリを巡回して拾っただけの並びは順序が
+ * 意味を持たないが、実際のトレーニングは
+ *   軽いストレッチで温める → 主要な筋トレ → 静的ストレッチで整える
+ * という流れが正しい。並びに意味を持たせることで、
+ * 利用者は「何をどの順でやるか」を考えなくてよくなる。
+ */
+export const PHASE_META = {
+  warmup:   { label: "ウォームアップ", note: "体を温めます" },
+  strength: { label: "筋トレ",         note: "今日のメイン" },
+  cooldown: { label: "ストレッチ",     note: "疲れを残しません" },
+};
+
+const WARMUP_MAX = 2;
+
+export function buildSession(picked) {
+  const strength = picked.filter((p) => p.ex.type === "strength");
+  const stretch = picked.filter((p) => p.ex.type === "stretch");
+
+  // 筋トレが無い日はストレッチだけの1段構成にする
+  if (strength.length === 0) {
+    if (stretch.length === 0) return [];
+    return [makePhase("cooldown", stretch)];
+  }
+  // ストレッチが無い日は筋トレだけ
+  if (stretch.length === 0) return [makePhase("strength", strength)];
+
+  const warmupCount = Math.min(WARMUP_MAX, Math.max(1, Math.floor(stretch.length / 3)));
+  const warmup = stretch.slice(0, warmupCount);
+  const cooldown = stretch.slice(warmupCount);
+
+  const phases = [makePhase("warmup", warmup), makePhase("strength", strength)];
+  if (cooldown.length > 0) phases.push(makePhase("cooldown", cooldown));
+  return phases;
+}
+
+function makePhase(key, items) {
+  return {
+    key,
+    label: PHASE_META[key].label,
+    note: PHASE_META[key].note,
+    items,
+    count: items.length,
+    minutes: Math.max(1, Math.round(items.reduce((s, p) => s + p.durationMin, 0))),
+  };
+}
+
+/** セッションを、通し番号付きの平坦な並びに展開する */
+export function flattenSession(phases) {
+  const out = [];
+  let n = 0;
+  phases.forEach((ph) => {
+    ph.items.forEach((item) => {
+      n += 1;
+      out.push({ ...item, phaseKey: ph.key, phaseLabel: ph.label, index: n });
+    });
+  });
+  return out;
+}
+
 export function excludedCategoriesForPain(painRegions) {
   const excluded = new Set();
   painRegions.forEach((region) => {
@@ -155,10 +194,6 @@ export function warningFor(ex, lastTrainedMap, yesterday) {
   return "";
 }
 
-/**
- * 設定（部位・目的・道具）・痛い部位・コンディションで候補を絞り込む。
- * 未選択の項目は絞り込みなし。
- */
 export function filterExercises(exercises, opts) {
   const {
     strengthCategory = new Set(),

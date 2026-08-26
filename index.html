@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#F5F8F5">
 <meta name="description" content="筋トレ・ストレッチ・有酸素運動の日々のトレーニングを管理するアプリ">
-<!-- 検索エンジンにインデックスさせない（GitHub Pages は誰でもアクセスできるため、
-     せめて検索結果には出さない。アクセス制限ではない点に注意） -->
 <meta name="robots" content="noindex, nofollow">
 <title>筋トレ・ストレッチ管理</title>
 <link rel="manifest" href="manifest.json">
@@ -19,18 +17,17 @@
 </head>
 <body>
 
-<!-- ============ ヘッダー ============ -->
 <header class="appbar">
   <div class="appbar__brand">
     <span class="appbar__mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M4 9h2v6H4zm14 0h2v6h-2zM7 6h3v12H7zm7 0h3v12h-3zm-4 4h4v4h-4z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M4 10v4M20 10v4M7.5 7v10M16.5 7v10M7.5 12h9"/></svg>
     </span>
-    <span class="appbar__title">トレーニング</span>
+    <span class="appbar__names">
+      <span class="appbar__title">トレーニング</span>
+      <span class="appbar__tag">無理なく続ける、毎日の習慣</span>
+    </span>
   </div>
-  <div class="appbar__streak" id="streak-badge" title="実施した日と休養日をあわせた継続日数">
-    <span class="appbar__streak-num" id="stat-streak">0</span>
-    <span class="appbar__streak-label">日つづけて<br>います</span>
-  </div>
+  <div class="appbar__today" id="appbar-today"></div>
 </header>
 
 <div class="shell">
@@ -62,60 +59,102 @@
     <!-- 今日                                                          -->
     <!-- ============================================================ -->
     <section class="view is-active" id="view-today">
+      <div class="today-grid">
 
-      <!-- コースカード：迷わず始めるための入口。判断は「はじめる」の1つだけ -->
-      <section class="course" id="course-card">
-        <p class="course__badge">今日のメニュー</p>
-        <h2 class="course__title" id="course-title">—</h2>
-        <p class="course__sub" id="course-sub"></p>
+        <div class="today-main">
 
-        <ol class="steps" id="course-steps"></ol>
+          <!-- コースカード：迷わず始めるための入口 -->
+          <section class="course" id="course-card">
+            <p class="course__badge">今日のメニュー</p>
+            <h2 class="course__title" id="course-title">—</h2>
+            <p class="course__sub" id="course-sub"></p>
 
-        <div class="course__progress">
-          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
-            <div class="progress__bar" id="course-progress"></div>
-          </div>
-          <span class="progress__label" id="course-progress-label"></span>
+            <ol class="flow" id="course-flow"></ol>
+
+            <div class="course__progress">
+              <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress__bar" id="course-progress"></div>
+              </div>
+              <span class="progress__label" id="course-progress-label"></span>
+            </div>
+
+            <button type="button" class="btn btn--cta" id="start-btn">はじめる</button>
+            <button type="button" class="btn btn--quiet" id="rest-btn">今日は休養日にする</button>
+          </section>
+
+          <!-- 体調・時間・痛み・体重 -->
+          <section class="panel">
+            <div class="field">
+              <span class="field__label">今日の体調</span>
+              <div class="face-row" id="chips-condition"></div>
+              <p class="field__hint" id="condition-hint"></p>
+            </div>
+
+            <div class="field">
+              <span class="field__label">使える時間</span>
+              <div class="chip-row" id="chips-time"></div>
+            </div>
+
+            <div class="field">
+              <span class="field__label">痛い・気になる部位</span>
+              <div class="chip-row" id="chips-pain"></div>
+              <button type="button" class="btn btn--outline btn--wide" id="open-body-map-btn">
+                人体図から選ぶ
+              </button>
+            </div>
+
+            <div class="field">
+              <span class="field__label">今日の体重</span>
+              <div class="input-row">
+                <input type="number" id="weight-input" inputmode="decimal" step="0.1"
+                       min="20" max="250" placeholder="60.0" autocomplete="off">
+                <span class="input-unit">kg</span>
+                <button id="save-weight-btn" class="btn btn--outline">保存</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 種目リスト（フェーズごとに区切る） -->
+          <div id="session-list"></div>
         </div>
 
-        <button type="button" class="btn btn--cta" id="start-btn">はじめる</button>
-        <button type="button" class="btn btn--quiet" id="rest-btn">今日は休養日にする</button>
-      </section>
+        <!-- 継続を実感させるサイド情報 -->
+        <aside class="today-side">
+          <section class="panel panel--streak">
+            <div class="streak">
+              <span class="streak__leaf streak__leaf--l" id="laurel-l" aria-hidden="true"></span>
+              <span class="streak__num" id="stat-streak">0</span>
+              <span class="streak__unit">日</span>
+              <span class="streak__leaf streak__leaf--r" id="laurel-r" aria-hidden="true"></span>
+            </div>
+            <p class="streak__label">つづけています</p>
+            <p class="streak__note" id="streak-note"></p>
+          </section>
 
-      <!-- 体調・時間・痛み：すべて1タップで済ませる -->
-      <section class="panel">
-        <div class="field">
-          <span class="field__label">今日の体調</span>
-          <div class="face-row" id="chips-condition"></div>
-          <p class="field__hint" id="condition-hint"></p>
-        </div>
+          <section class="panel">
+            <h3 class="panel__title">今週の記録</h3>
+            <div class="week" id="week-dots"></div>
+            <div class="course__progress">
+              <div class="progress"><div class="progress__bar" id="week-progress"></div></div>
+              <span class="progress__label" id="week-label"></span>
+            </div>
+          </section>
 
-        <div class="field">
-          <span class="field__label">使える時間</span>
-          <div class="chip-row" id="chips-time"></div>
-        </div>
+          <section class="panel">
+            <h3 class="panel__title">鍛えた部位（今週）</h3>
+            <div class="bodystat">
+              <div class="bodystat__fig" id="week-bodymap"></div>
+              <ul class="bodystat__list" id="week-regions"></ul>
+            </div>
+          </section>
 
-        <div class="field">
-          <span class="field__label">痛い・気になる部位</span>
-          <div class="chip-row" id="chips-pain"></div>
-          <button type="button" class="btn btn--outline btn--wide" id="open-body-map-btn">
-            人体図から選ぶ
-          </button>
-        </div>
+          <section class="panel">
+            <h3 class="panel__title">最近の記録</h3>
+            <ul class="recent" id="recent-list"></ul>
+          </section>
+        </aside>
 
-        <div class="field">
-          <span class="field__label">今日の体重</span>
-          <div class="input-row">
-            <input type="number" id="weight-input" inputmode="decimal" step="0.1"
-                   min="20" max="250" placeholder="60.0" autocomplete="off">
-            <span class="input-unit">kg</span>
-            <button id="save-weight-btn" class="btn btn--outline">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <h3 class="section-title" id="menu-summary"></h3>
-      <section class="cards" id="card-list" aria-label="今日の種目メニュー"></section>
+      </div>
     </section>
 
     <!-- ============================================================ -->

@@ -14,8 +14,9 @@ import {
   CONDITIONS, PAIN_REGIONS, PURPOSES, TIME_PRESETS,
   conditionByKey, calcCalories, filterExercises, curateForTime, warningFor,
   uniqueCategoriesByType, uniqueEquipment, youtubeUrl, imageSearchUrl,
-  regionGroupOf, summarizeCourse,
+  regionGroupOf, REGION_GROUPS, buildSession, flattenSession,
 } from "./domain.js";
+import { poseArt, bodyMap, laurel } from "./art.js";
 import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js";
 
 const EX_BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
@@ -30,6 +31,8 @@ const state = {
   fallbackWeight: 60,
   loggedToday: new Set(),
   picked: [],
+  phases: [],
+  flat: [],
   historyRange: 30,
   calMonth: null,      // { y, m }
   bodySide: "front",
@@ -152,10 +155,6 @@ async function loadFallbackWeight() {
 
 /* ---------------- 継続日数 ---------------- */
 
-async function refreshStreak() {
-  $("stat-streak").textContent = String(await storage.getStreak(state.today));
-}
-
 /* ---------------- 今日：コースカード ---------------- */
 
 function currentMinutes() {
@@ -206,27 +205,25 @@ function renderPainChips() {
   }, "chip--pain");
 }
 
-/** 今日のメニューを組み立てて、コースカードとカードリストを更新する */
+/** 今日のメニューを組み立てて、コースカードと種目リストを更新する */
 function renderToday() {
   const card = $("course-card");
   const startBtn = $("start-btn");
   const restBtn = $("rest-btn");
-  const list = $("card-list");
 
   // --- 休養日 ---
   if (state.log.rest) {
     card.classList.add("is-rest");
     $("course-title").textContent = "休養日";
-    $("course-sub").textContent = "しっかり休むのもトレーニングのうちです。継続日数は途切れません。";
-    $("course-steps").innerHTML = "";
+    $("course-sub").textContent = "しっかり休むのもトレーニングのうち。継続日数は途切れません。";
+    $("course-flow").innerHTML = "";
     $("course-progress").style.width = "100%";
     $("course-progress-label").textContent = "休養";
     startBtn.disabled = true;
     startBtn.textContent = "今日はお休み";
     restBtn.textContent = "やっぱり運動する";
     restBtn.classList.add("is-on");
-    list.innerHTML = "";
-    $("menu-summary").textContent = "";
+    $("session-list").innerHTML = "";
     return;
   }
 
@@ -241,6 +238,8 @@ function renderToday() {
     conditionKey: state.log.condition,
   });
   const { picked, totalMin } = curateForTime(filtered, currentMinutes(), state.log.condition);
+  state.phases = buildSession(picked);
+  state.flat = flattenSession(state.phases);
   state.picked = picked;
 
   // 設定時間ではなく「実際に組めた時間」を出す。
@@ -249,94 +248,317 @@ function renderToday() {
     ? `${Math.round(totalMin)}分コース`
     : "メニューなし";
 
-  const steps = summarizeCourse(picked);
-  const stepsBox = $("course-steps");
-  stepsBox.innerHTML = "";
-  steps.forEach((s, i) => {
+  renderFlow();
+  updateProgress();
+  renderSessionList();
+}
+
+function renderFlow() {
+  const box = $("course-flow");
+  box.innerHTML = "";
+  state.phases.forEach((ph, i) => {
     if (i > 0) {
       const arrow = document.createElement("li");
-      arrow.className = "step__arrow";
+      arrow.className = "flow__arrow";
       arrow.textContent = "→";
       arrow.setAttribute("aria-hidden", "true");
-      stepsBox.appendChild(arrow);
+      box.appendChild(arrow);
     }
     const li = document.createElement("li");
-    li.className = `step step--${s.key}`;
-    const icon = document.createElement("span");
-    icon.className = "step__icon";
-    icon.appendChild(svg(STEP_ICON[s.key]));
-    li.appendChild(icon);
+    li.className = `flow__step flow__step--${ph.key}`;
+
+    const disc = document.createElement("span");
+    disc.className = "flow__disc";
+    disc.appendChild(poseArt(phaseArtGroup(ph)));
+    const num = document.createElement("span");
+    num.className = "flow__num";
+    num.textContent = String(i + 1);
+    disc.appendChild(num);
+    li.appendChild(disc);
+
     const label = document.createElement("span");
-    label.className = "step__label";
-    label.textContent = s.label;
+    label.className = "flow__label";
+    label.textContent = ph.label;
     li.appendChild(label);
+
     const meta = document.createElement("span");
-    meta.className = "step__meta";
-    meta.textContent = `${s.count}種目 ・ ${s.minutes}分`;
+    meta.className = "flow__meta";
+    meta.textContent = `${ph.count}種目 ・ ${ph.minutes}分`;
     li.appendChild(meta);
-    stepsBox.appendChild(li);
+
+    box.appendChild(li);
   });
+}
 
-  const done = picked.filter((p) => state.loggedToday.has(p.ex.id)).length;
-  const pct = picked.length ? Math.round((done / picked.length) * 100) : 0;
+/** そのフェーズを代表する部位グループ（最も多い部位）を選ぶ */
+function phaseArtGroup(phase) {
+  const counts = new Map();
+  phase.items.forEach((p) => {
+    const g = regionGroupOf(p.ex.category);
+    counts.set(g, (counts.get(g) || 0) + 1);
+  });
+  let best = "全身", max = 0;
+  counts.forEach((v, k) => { if (v > max) { max = v; best = k; } });
+  return best;
+}
+
+function updateProgress() {
+  const total = state.flat.length;
+  const done = state.flat.filter((p) => state.loggedToday.has(p.ex.id)).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
   $("course-progress").style.width = `${pct}%`;
-  $("course-progress-label").textContent = `${done} / ${picked.length} 完了`;
+  $("course-progress-label").textContent = total ? `${done} / ${total} 完了` : "";
 
-  if (picked.length === 0) {
-    $("course-sub").textContent = filtered.length === 0
-      ? "条件に合う種目がありません。設定を見直してください。"
-      : "時間が短すぎます。使える時間を増やしてください。";
+  const startBtn = $("start-btn");
+  const sub = $("course-sub");
+  if (total === 0) {
+    sub.textContent = "条件に合う種目がありません。設定を見直してください。";
     startBtn.disabled = true;
   } else if (done === 0) {
-    $("course-sub").textContent = conditionByKey(state.log.condition).note;
+    sub.textContent = conditionByKey(state.log.condition).note;
     startBtn.textContent = "はじめる";
-  } else if (done < picked.length) {
-    $("course-sub").textContent = `あと ${picked.length - done} 種目です。`;
+    startBtn.disabled = false;
+  } else if (done < total) {
+    sub.textContent = `あと ${total - done} 種目です。`;
     startBtn.textContent = "つづきから";
+    startBtn.disabled = false;
   } else {
-    $("course-sub").textContent = "今日のメニューを完了しました。おつかれさまでした。";
+    sub.textContent = "今日のメニューを完了しました。おつかれさまでした。";
     startBtn.textContent = "完了";
     startBtn.disabled = true;
   }
-
-  renderCards();
 }
 
-function renderCards() {
-  const list = $("card-list");
-  const picked = state.picked;
-  list.innerHTML = "";
+function renderSessionList() {
+  const box = $("session-list");
+  box.innerHTML = "";
 
-  if (picked.length === 0) {
-    $("menu-summary").textContent = "";
+  if (state.flat.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.textContent = "条件に合う種目がありません。設定タブで絞り込みを見直してください。";
-    list.appendChild(empty);
+    box.appendChild(empty);
     return;
   }
 
   const weight = effectiveWeight();
-  const totalCal = picked.reduce((s, p) => s + calcCalories(p.ex, weight, p.sets), 0);
-  $("menu-summary").textContent =
-    `全${picked.length}種目 ・ 想定 約${Math.round(totalCal)}kcal`;
+  state.phases.forEach((ph, i) => {
+    const head = document.createElement("div");
+    head.className = `phase phase--${ph.key}`;
+    head.innerHTML = `<span class="phase__num"></span>
+      <span class="phase__label"></span><span class="phase__meta"></span>`;
+    head.querySelector(".phase__num").textContent = String(i + 1);
+    head.querySelector(".phase__label").textContent = ph.label;
+    head.querySelector(".phase__meta").textContent = `${ph.note} ・ ${ph.minutes}分`;
+    box.appendChild(head);
 
-  const frag = document.createDocumentFragment();
-  picked.forEach(({ ex, sets, durationMin }) => {
-    frag.appendChild(buildCard(ex, sets, durationMin, weight));
+    const ul = document.createElement("ul");
+    ul.className = "ex-list";
+    ph.items.forEach((item) => {
+      const flat = state.flat.find((f) => f.ex.id === item.ex.id);
+      ul.appendChild(buildExRow(item, ph, flat ? flat.index : 0, weight));
+    });
+    box.appendChild(ul);
   });
-  list.appendChild(frag);
 }
 
-function buildMediaSlot(ex) {
-  if (!state.mediaIndex || !state.mediaIndex.has(ex.id)) return null;
-  const img = document.createElement("img");
-  img.className = "card__media-img";
-  img.alt = "";
-  img.loading = "lazy";
-  img.src = `media/images/${ex.id}.jpg`;
-  img.addEventListener("error", () => img.remove(), { once: true });
-  return img;
+function checkSvg() {
+  return svg(["M5 12.5 L10 17 L19 7.5"]);
+}
+
+function buildExRow({ ex, sets, durationMin }, phase, index, weight) {
+  const warnText = warningFor(ex, state.lastTrained, state.yesterday);
+  const calories = calcCalories(ex, weight, sets);
+  const done = state.loggedToday.has(ex.id);
+  const setsChanged = sets !== (ex.default_sets || 1);
+
+  const li = document.createElement("li");
+  li.className = `ex ex--${phase.key}` + (done ? " is-done" : "") + (warnText ? " is-warn" : "");
+  li.dataset.id = ex.id;
+
+  const art = document.createElement("span");
+  art.className = "ex__art";
+  if (state.mediaIndex && state.mediaIndex.has(ex.id)) {
+    const img = document.createElement("img");
+    img.src = `media/images/${ex.id}.jpg`;
+    img.alt = ""; img.loading = "lazy";
+    img.addEventListener("error", () => {
+      img.remove(); art.prepend(poseArt(regionGroupOf(ex.category)));
+    }, { once: true });
+    art.appendChild(img);
+  } else {
+    art.appendChild(poseArt(regionGroupOf(ex.category)));
+  }
+  const num = document.createElement("span");
+  num.className = "ex__num";
+  num.textContent = String(index);
+  art.appendChild(num);
+  const check = document.createElement("span");
+  check.className = "ex__check" + (done ? " ex__check--static" : "");
+  check.appendChild(checkSvg());
+  art.appendChild(check);
+  li.appendChild(art);
+
+  const body = document.createElement("div");
+  body.className = "ex__body";
+  const setsLabel = ex.type === "stretch"
+    ? `${sets}セット`
+    : (setsChanged ? `${ex.default_sets}→${sets}セット` : `${sets}セット`);
+  // 情報は「部位＝チップ」「それ以外＝1行のメタ」に畳む。
+  // 全部チップにすると折り返して行が伸び、リストが読みにくくなる。
+  body.innerHTML = `
+    <h4 class="ex__name"></h4>
+    <div class="ex__chips"><span class="ex__chip"></span></div>
+    <div class="ex__meta"></div>
+  `;
+  body.querySelector(".ex__name").textContent = ex.name;
+  body.querySelector(".ex__chip").textContent = ex.category;
+  const metaParts = [setsLabel, `約${Math.round(durationMin)}分`, `${calories}kcal`];
+  if (ex.equipment && ex.equipment !== "なし") metaParts.unshift(ex.equipment);
+  if (warnText) metaParts.push(warnText);
+  body.querySelector(".ex__meta").textContent = metaParts.join(" ・ ");
+  li.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "ex__actions";
+  const doneBtn = document.createElement("button");
+  doneBtn.type = "button";
+  doneBtn.className = "ex__done";
+  doneBtn.textContent = done ? "済" : "完了";
+  doneBtn.disabled = done;
+  doneBtn.addEventListener("click", () => handleLogDone(ex, calories, li, doneBtn));
+  actions.appendChild(doneBtn);
+
+  const links = document.createElement("div");
+  links.className = "ex__links";
+  [["動画", youtubeUrl(ex.youtube_query)], ["画像", imageSearchUrl(ex.image_query)]]
+    .forEach(([label, url]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ex__link";
+      b.textContent = label;
+      b.addEventListener("click", () => window.open(url, "_blank", "noopener"));
+      links.appendChild(b);
+    });
+  actions.appendChild(links);
+  li.appendChild(actions);
+
+  return li;
+}
+
+async function handleLogDone(ex, calories, rowEl, buttonEl) {
+  buttonEl.disabled = true;
+  try {
+    state.log = await storage.addExercise(state.today, {
+      id: ex.id, name: ex.name, calories,
+    });
+    state.loggedToday.add(ex.id);
+    rowEl.classList.add("is-done");
+    rowEl.classList.remove("is-next");
+    buttonEl.textContent = "済";
+    rowEl.querySelector(".ex__check").classList.add("show");
+    updateProgress();
+    if (state.flat.every((p) => state.loggedToday.has(p.ex.id))) {
+      showToast("今日のメニューを完了しました");
+    }
+    await renderSide();
+  } catch (err) {
+    buttonEl.disabled = false;
+    showToast("記録に失敗しました。もう一度お試しください。");
+    console.error(err);
+  }
+}
+
+/* ---------------- サイド：継続を実感させる情報 ---------------- */
+
+const DOW_SHORT = ["日", "月", "火", "水", "木", "金", "土"];
+
+async function renderSide() {
+  const streak = await storage.getStreak(state.today);
+  $("stat-streak").textContent = String(streak);
+  if (!$("laurel-l").firstChild) {
+    $("laurel-l").appendChild(laurel());
+    $("laurel-r").appendChild(laurel());
+  }
+  $("streak-note").textContent = streak === 0
+    ? "今日から始めましょう。"
+    : "休養日も継続に数えています。";
+
+  // 直近7日（今日を含む）
+  const days = [];
+  for (let i = 6; i >= 0; i--) days.push(shiftDate(state.today, -i));
+  const logs = await storage.getLogs(days[0], days[6]);
+  const byDate = new Map(logs.map((l) => [l.date, l]));
+
+  const weekBox = $("week-dots");
+  weekBox.innerHTML = "";
+  let doneCount = 0;
+  days.forEach((d) => {
+    const log = byDate.get(d);
+    const trained = log && (log.exercises || []).length > 0;
+    const rest = log && log.rest;
+    if (trained || rest) doneCount++;
+    const cell = document.createElement("div");
+    cell.className = "week__day"
+      + (trained ? " week__day--done" : rest ? " week__day--rest" : "")
+      + (d === state.today ? " week__day--today" : "");
+    const dow = document.createElement("span");
+    dow.className = "week__dow";
+    dow.textContent = DOW_SHORT[new Date(...d.split("-").map((v, i) => i === 1 ? +v - 1 : +v)).getDay()];
+    cell.appendChild(dow);
+    const mark = document.createElement("span");
+    mark.className = "week__mark";
+    if (trained) mark.appendChild(checkSvg());
+    cell.appendChild(mark);
+    cell.title = `${d} — ${trained ? "実施" : rest ? "休養日" : "記録なし"}`;
+    weekBox.appendChild(cell);
+  });
+  $("week-progress").style.width = `${Math.round((doneCount / 7) * 100)}%`;
+  $("week-label").textContent = `${doneCount} / 7 日`;
+
+  // 鍛えた部位（今週）
+  const active = new Set();
+  logs.forEach((l) => (l.exercises || []).forEach((e) => {
+    const meta = EX_BY_ID.get(e.id);
+    if (meta) active.add(regionGroupOf(meta.category));
+  }));
+  const fig = $("week-bodymap");
+  fig.innerHTML = "";
+  fig.appendChild(bodyMap(active));
+  const list = $("week-regions");
+  list.innerHTML = "";
+  REGION_GROUPS.forEach((g) => {
+    const li = document.createElement("li");
+    li.className = active.has(g) ? "" : "is-off";
+    li.textContent = g;
+    list.appendChild(li);
+  });
+
+  // 最近の記録
+  const recentLogs = (await storage.getLogs(shiftDate(state.today, -21), state.today))
+    .filter((l) => (l.exercises || []).length > 0 || l.rest)
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .slice(0, 5);
+  const recent = $("recent-list");
+  recent.innerHTML = "";
+  if (recentLogs.length === 0) {
+    recent.innerHTML = `<li><span class="recent__name" style="color:var(--ink-muted)">まだ記録がありません</span></li>`;
+  }
+  recentLogs.forEach((l) => {
+    const ex = l.exercises || [];
+    const cal = Math.round(ex.reduce((s, e) => s + (e.calories || 0), 0));
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="recent__body">
+        <span class="recent__date"></span><br><span class="recent__name"></span>
+      </span><span class="recent__val"></span>`;
+    li.querySelector(".recent__date").textContent = l.date.slice(5).replace("-", "/");
+    li.querySelector(".recent__name").textContent =
+      ex.length ? `${ex.length}種目` : "休養日";
+    const val = li.querySelector(".recent__val");
+    val.textContent = ex.length ? `${cal} kcal` : "—";
+    if (!ex.length) val.classList.add("recent__val--rest");
+    recent.appendChild(li);
+  });
 }
 
 async function loadMediaIndex() {
@@ -348,104 +570,14 @@ async function loadMediaIndex() {
   } catch (_) { /* 未配置なら画像機能は無効のまま */ }
 }
 
-function checkSvg() {
-  return svg(["M5 12.5 L10 17 L19 7.5"]);
-}
-
-function buildCard(ex, sets, durationMin, weight) {
-  const warnText = warningFor(ex, state.lastTrained, state.yesterday);
-  const calories = calcCalories(ex, weight, sets);
-  const done = state.loggedToday.has(ex.id);
-  const setsChanged = sets !== (ex.default_sets || 1);
-
-  const card = document.createElement("article");
-  card.className = "card" + (warnText ? " is-warn" : "") + (done ? " is-done" : "");
-  card.dataset.id = ex.id;
-
-  const setsLabel = ex.type === "stretch"
-    ? `${sets}セット`
-    : (setsChanged ? `${ex.default_sets}→${sets}セット` : `${sets}セット`);
-
-  card.innerHTML = `
-    <div class="${done ? "stamp stamp--static" : "stamp"}"></div>
-    <div class="card__info">
-      <div class="card__name-row">
-        <span class="card__name"></span>
-        ${warnText ? `<span class="card__warn">${warnText}</span>` : ""}
-      </div>
-      <div class="card__meta">${ex.category} ・ 道具 ${ex.equipment}</div>
-      <div class="card__meta">${setsLabel} ・ 約${Math.round(durationMin)}分</div>
-      <div class="card__chip">想定 ${calories} kcal</div>
-      ${ex.source ? `<div class="card__source">出典 ${ex.source}</div>` : ""}
-    </div>
-    <div class="card__actions">
-      <button class="btn btn--outline btn-video" type="button">動画</button>
-      <button class="btn btn--outline btn-image" type="button">画像</button>
-      <button class="btn btn--done btn-done" type="button" ${done ? "disabled" : ""}>
-        ${done ? "記録済み" : "完了"}
-      </button>
-    </div>
-  `;
-  card.querySelector(".card__name").textContent = ex.name;
-  card.querySelector(".stamp").appendChild(checkSvg());
-  const media = buildMediaSlot(ex);
-  if (media) card.querySelector(".card__info").prepend(media);
-
-  card.querySelector(".btn-video").addEventListener("click", () => {
-    window.open(youtubeUrl(ex.youtube_query), "_blank", "noopener");
-  });
-  card.querySelector(".btn-image").addEventListener("click", () => {
-    window.open(imageSearchUrl(ex.image_query), "_blank", "noopener");
-  });
-  card.querySelector(".btn-done").addEventListener("click", (e) => {
-    handleLogDone(ex, calories, card, e.currentTarget);
-  });
-
-  return card;
-}
-
-async function handleLogDone(ex, calories, cardEl, buttonEl) {
-  buttonEl.disabled = true;
-  try {
-    state.log = await storage.addExercise(state.today, {
-      id: ex.id, name: ex.name, calories,
-    });
-    state.loggedToday.add(ex.id);
-    cardEl.classList.add("is-done");
-    cardEl.classList.remove("is-next");
-    buttonEl.textContent = "記録済み";
-    cardEl.querySelector(".stamp").classList.add("show");
-
-    // 進捗だけ更新する（カードを作り直すとスタンプの演出が消えるため）
-    const done = state.picked.filter((p) => state.loggedToday.has(p.ex.id)).length;
-    const pct = state.picked.length ? Math.round((done / state.picked.length) * 100) : 0;
-    $("course-progress").style.width = `${pct}%`;
-    $("course-progress-label").textContent = `${done} / ${state.picked.length} 完了`;
-    if (done === state.picked.length) {
-      $("course-sub").textContent = "今日のメニューを完了しました。おつかれさまでした。";
-      $("start-btn").textContent = "完了";
-      $("start-btn").disabled = true;
-      showToast("今日のメニューを完了しました");
-    } else {
-      $("course-sub").textContent = `あと ${state.picked.length - done} 種目です。`;
-      $("start-btn").textContent = "つづきから";
-    }
-    await refreshStreak();
-  } catch (err) {
-    buttonEl.disabled = false;
-    showToast("記録に失敗しました。もう一度お試しください。");
-    console.error(err);
-  }
-}
-
 /** 「はじめる」= 次にやる種目まで運んで強調するだけ。判断を増やさない */
 function setupStartButton() {
   $("start-btn").addEventListener("click", () => {
-    const next = state.picked.find((p) => !state.loggedToday.has(p.ex.id));
+    const next = state.flat.find((p) => !state.loggedToday.has(p.ex.id));
     if (!next) return;
-    const el = document.querySelector(`.card[data-id="${next.ex.id}"]`);
+    const el = document.querySelector(`.ex[data-id="${next.ex.id}"]`);
     if (!el) return;
-    document.querySelectorAll(".card.is-next").forEach((c) => c.classList.remove("is-next"));
+    document.querySelectorAll(".ex.is-next").forEach((c) => c.classList.remove("is-next"));
     el.classList.add("is-next");
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   });
@@ -458,8 +590,8 @@ function setupRestButton() {
       return;
     }
     state.log = await storage.setRest(state.today, !state.log.rest);
-    await refreshStreak();
     renderToday();
+    await renderSide();
     showToast(state.log.rest
       ? "休養日にしました。継続日数は途切れません"
       : "休養日を取り消しました");
@@ -889,7 +1021,11 @@ async function init() {
   renderRangeChips();
   renderToday();
 
-  await refreshStreak();
+  const now2 = new Date();
+  $("appbar-today").textContent =
+    `${now2.getMonth() + 1}月${now2.getDate()}日（${DOW_SHORT[now2.getDay()]}）`;
+
+  await renderSide();
   renderStorageInfo();
 
   requestPersistence().then(() => renderStorageInfo());
@@ -904,8 +1040,49 @@ setInterval(() => {
   if (todayKey() !== state.today) location.reload();
 }, 60 * 1000);
 
-init().catch((err) => {
-  console.error(err);
-  document.body.insertAdjacentHTML("afterbegin",
-    `<div class="empty-state" style="margin:16px">起動に失敗しました: ${err.message}</div>`);
-});
+/**
+ * 起動失敗時の自動復旧。
+ *
+ * 古い Service Worker が古い app.js を配り続けていると、新しい index.html と
+ * 組み合わさって「存在しない要素を触る」形で起動に失敗する。
+ * 利用者に DevTools を開かせるわけにはいかないので、
+ * 一度だけ SW とキャッシュを捨てて読み直す。
+ * sessionStorage のフラグで、無限リロードにならないようにしている。
+ */
+const RECOVERY_FLAG = "sw-recovery-attempted";
+
+async function recoverFromStaleCache() {
+  if (sessionStorage.getItem(RECOVERY_FLAG)) return false;
+  sessionStorage.setItem(RECOVERY_FLAG, "1");
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (e) {
+    console.warn("復旧処理に失敗:", e);
+    return false;
+  }
+  return true;
+}
+
+init()
+  .then(() => sessionStorage.removeItem(RECOVERY_FLAG))
+  .catch(async (err) => {
+    console.error(err);
+    if (await recoverFromStaleCache()) {
+      location.reload();
+      return;
+    }
+    document.body.insertAdjacentHTML("afterbegin",
+      `<div class="empty-state" style="margin:16px;text-align:left">
+        <strong>起動に失敗しました</strong><br>${err.message}
+        <pre style="white-space:pre-wrap;font-size:11px;opacity:.7;margin-top:8px">${
+          (err.stack || "").split("\n").slice(0, 4).join("\n")
+        }</pre>
+      </div>`);
+  });
