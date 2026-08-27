@@ -634,6 +634,21 @@ ol, ul { list-style: none; padding: 0; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* 取消ボタン付きのトーストは押せる必要がある */
+.toast--action {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 14px;
+  padding-right: 12px;
+}
+.toast__action {
+  appearance: none; cursor: pointer;
+  background: none; border: 0; padding: 4px 2px;
+  color: inherit; font-size: 13px; font-weight: 700;
+  text-decoration: underline; text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.toast__action:hover { opacity: .75; }
+
 /* =========================================================================
    タブレット以上
    ========================================================================= */
@@ -746,7 +761,8 @@ ol, ul { list-style: none; padding: 0; }
   scroll-margin-top: 86px;
   transition: border-color .15s, opacity .2s;
 }
-.ex.is-done { opacity: .55; }
+.ex.is-done { background: var(--surface); }
+.ex.is-done .ex__art, .ex.is-done .ex__body { opacity: .5; }
 .ex.is-next { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash), var(--shadow); }
 .ex.is-warn { background: var(--warn-wash); border-color: var(--warn-line); }
 
@@ -820,9 +836,16 @@ ol, ul { list-style: none; padding: 0; }
   transition: background .15s, color .15s;
 }
 .ex__done:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
-.ex__done:disabled {
+.ex__done:disabled { opacity: .6; cursor: progress; }
+
+/* 記録済み。もう一度押すと取り消せる */
+.ex__done.is-done {
   background: var(--surface-2); color: var(--ink-muted);
-  border-color: transparent; cursor: default;
+  border-color: transparent;
+}
+.ex__done.is-done:hover:not(:disabled) {
+  background: var(--surface); color: var(--danger);
+  border-color: var(--danger);
 }
 
 .ex__links { display: flex; gap: 5px; }

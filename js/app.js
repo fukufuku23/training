@@ -50,12 +50,37 @@ const NS = "http://www.w3.org/2000/svg";
 
 /* ---------------- 汎用UI ---------------- */
 
-function showToast(message) {
+/**
+ * トースト。action を渡すと取消ボタン付きになる。
+ *
+ * 「本当に完了にしますか？」のような確認ダイアログは出さない。
+ * 毎回の記録に確認が挟まると入力コストが上がり、続かなくなる。
+ * かわりに、すべての操作を1タップで戻せるようにしている。
+ */
+function showToast(message, action) {
   const toast = $("toast");
-  toast.textContent = message;
+  toast.innerHTML = "";
+  const text = document.createElement("span");
+  text.textContent = message;
+  toast.appendChild(text);
+
+  toast.classList.toggle("toast--action", !!action);
+  if (action) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "toast__action";
+    btn.textContent = action.label;
+    btn.addEventListener("click", () => {
+      toast.classList.remove("show");
+      action.onClick();
+    });
+    toast.appendChild(btn);
+  }
+
   toast.classList.add("show");
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => toast.classList.remove("show"), 2600);
+  showToast._t = setTimeout(
+    () => toast.classList.remove("show"), action ? 7000 : 2600);
 }
 
 function svg(paths, attrs = {}) {
@@ -423,10 +448,13 @@ function buildExRow({ ex, sets, durationMin }, phase, index, weight) {
   actions.className = "ex__actions";
   const doneBtn = document.createElement("button");
   doneBtn.type = "button";
-  doneBtn.className = "ex__done";
+  doneBtn.className = "ex__done" + (done ? " is-done" : "");
   doneBtn.textContent = done ? "済" : "完了";
-  doneBtn.disabled = done;
-  doneBtn.addEventListener("click", () => handleLogDone(ex, calories, li, doneBtn));
+  doneBtn.title = done ? "タップで取り消し" : "完了として記録";
+  doneBtn.addEventListener("click", () => {
+    if (state.loggedToday.has(ex.id)) handleUndo(ex, li, doneBtn);
+    else handleLogDone(ex, calories, li, doneBtn);
+  });
   actions.appendChild(doneBtn);
 
   const links = document.createElement("div");
@@ -446,6 +474,25 @@ function buildExRow({ ex, sets, durationMin }, phase, index, weight) {
   return li;
 }
 
+function markRowDone(rowEl, buttonEl, animate) {
+  rowEl.classList.add("is-done");
+  rowEl.classList.remove("is-next");
+  buttonEl.textContent = "済";
+  buttonEl.title = "タップで取り消し";
+  buttonEl.classList.add("is-done");
+  const check = rowEl.querySelector(".ex__check");
+  check.classList.add(animate ? "show" : "ex__check--static");
+}
+
+function markRowUndone(rowEl, buttonEl) {
+  rowEl.classList.remove("is-done");
+  buttonEl.textContent = "完了";
+  buttonEl.title = "完了として記録";
+  buttonEl.classList.remove("is-done");
+  const check = rowEl.querySelector(".ex__check");
+  check.classList.remove("show", "ex__check--static");
+}
+
 async function handleLogDone(ex, calories, rowEl, buttonEl) {
   buttonEl.disabled = true;
   try {
@@ -453,19 +500,46 @@ async function handleLogDone(ex, calories, rowEl, buttonEl) {
       id: ex.id, name: ex.name, calories,
     });
     state.loggedToday.add(ex.id);
-    rowEl.classList.add("is-done");
-    rowEl.classList.remove("is-next");
-    buttonEl.textContent = "済";
-    rowEl.querySelector(".ex__check").classList.add("show");
+    markRowDone(rowEl, buttonEl, true);
     updateProgress();
-    if (state.flat.every((p) => state.loggedToday.has(p.ex.id))) {
-      showToast("今日のメニューを完了しました");
-    }
     await renderSide();
+
+    const allDone = state.flat.every((p) => state.loggedToday.has(p.ex.id));
+    showToast(
+      allDone ? "今日のメニューを完了しました" : `「${ex.name}」を記録しました`,
+      { label: "取消", onClick: () => handleUndo(ex, rowEl, buttonEl) }
+    );
   } catch (err) {
-    buttonEl.disabled = false;
     showToast("記録に失敗しました。もう一度お試しください。");
     console.error(err);
+  } finally {
+    buttonEl.disabled = false;
+  }
+}
+
+/** 記録の取り消し。取り消したあとも1タップで戻せるようにする */
+async function handleUndo(ex, rowEl, buttonEl) {
+  buttonEl.disabled = true;
+  try {
+    state.log = await storage.removeExercise(state.today, ex.id);
+    state.loggedToday.delete(ex.id);
+    markRowUndone(rowEl, buttonEl);
+    updateProgress();
+    await renderSide();
+
+    const entry = state.flat.find((p) => p.ex.id === ex.id);
+    const calories = entry
+      ? calcCalories(ex, effectiveWeight(), entry.sets)
+      : 0;
+    showToast(`「${ex.name}」の記録を取り消しました`, {
+      label: "元に戻す",
+      onClick: () => handleLogDone(ex, calories, rowEl, buttonEl),
+    });
+  } catch (err) {
+    showToast("取り消しに失敗しました。もう一度お試しください。");
+    console.error(err);
+  } finally {
+    buttonEl.disabled = false;
   }
 }
 

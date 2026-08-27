@@ -7,3 +7,6 @@ desktop.ini
 training-log-*.json
 
 node_modules/
+
+# Windowsのインターネットショートカット（各自の環境依存）
+*.url
