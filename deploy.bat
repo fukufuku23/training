@@ -43,6 +43,27 @@ set "MODE=%~1"
 if /i "!MODE!"=="/open"    goto open
 if /i "!MODE!"=="/private" goto open
 
+REM ------------------------------------------------------- stamp asset version
+REM  GitHub Pages serves js/css with max-age=600. On a normal reload the
+REM  browser reuses those from its HTTP cache WITHOUT going through the
+REM  service worker, so an update can stay invisible for ~10 minutes.
+REM  Changing the URL is the only reliable fix, so stamp ?v=<timestamp>
+REM  into index.html and into the import statements of app.js.
+echo Stamping asset version...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$enc = New-Object System.Text.UTF8Encoding($false);" ^
+  "$v = Get-Date -Format 'yyyyMMddHHmmss';" ^
+  "foreach ($f in @('index.html','js\app.js')) {" ^
+  "  $p = Join-Path (Get-Location) $f;" ^
+  "  $t = [IO.File]::ReadAllText($p, $enc);" ^
+  "  $t = [regex]::Replace($t, '\?v=[0-9A-Za-z]+', '?v=' + $v);" ^
+  "  [IO.File]::WriteAllText($p, $t, $enc);" ^
+  "}; Write-Host ('  version ' + $v)"
+if errorlevel 1 (
+  echo [WARN] Version stamping failed. Continuing without it.
+)
+echo.
+
 REM -------------------------------------------------------- commit and push
 set "MSG=%~1"
 if not defined MSG set "MSG=update !DATE! !TIME!"
@@ -60,10 +81,11 @@ echo Pushing...
 git push || (echo [ERROR] push failed. & pause & exit /b 1)
 echo.
 
-REM ------------------------------------- wait until the CDN serves the new file
-REM  Compare the hash of the local index.html with the published one.
-REM  GitHub Pages caches for a while, so a random query busts the edge cache.
-call :hash "index.html" LOCAL
+REM ------------------------------------- wait until the CDN serves the new files
+REM  Compare local files with the published ones.
+REM  Checking index.html alone is NOT enough: a change limited to
+REM  app.js or style.css leaves index.html untouched, so it would match
+REM  immediately and report success while the old code is still served.
 echo Waiting for GitHub Pages to publish (up to 3 minutes)...
 set /a TRIES=0
 
@@ -74,16 +96,30 @@ if !TRIES! GTR 36 (
   echo [WARN] Timed out. Opening anyway - it may still be the previous build.
   goto open
 )
-curl -s -f -o "%TEMP%\_deploy_check.html" "!SITE!index.html?nocache=!RANDOM!!TRIES!" 2>nul
-if exist "%TEMP%\_deploy_check.html" (
-  call :hash "%TEMP%\_deploy_check.html" REMOTE
-  del "%TEMP%\_deploy_check.html" >nul 2>nul
-  if /i "!LOCAL!"=="!REMOTE!" (
-    echo.
-    echo Published.
-    goto open
+
+set "MISMATCH="
+for %%F in ("index.html;index.html" "js\app.js;js/app.js" "css\style.css;css/style.css" "js\domain.js;js/domain.js") do (
+  for /f "tokens=1,2 delims=;" %%A in (%%~F) do (
+    if not defined MISMATCH (
+      call :hash "%%A" LOCALH
+      curl -s -f -o "%TEMP%\_deploy_check" "!SITE!%%B?nocache=!RANDOM!!TRIES!" 2>nul
+      if exist "%TEMP%\_deploy_check" (
+        call :hash "%TEMP%\_deploy_check" REMOTEH
+        del "%TEMP%\_deploy_check" >nul 2>nul
+        if /i not "!LOCALH!"=="!REMOTEH!" set "MISMATCH=%%B"
+      ) else (
+        set "MISMATCH=%%B"
+      )
+    )
   )
 )
+
+if not defined MISMATCH (
+  echo.
+  echo Published. All checked files match.
+  goto open
+)
+
 <nul set /p "=."
 timeout /t 5 /nobreak >nul
 goto poll
