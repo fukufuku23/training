@@ -65,28 +65,31 @@ private でも public になる**（サイトに認証をかけられるのは E
 
 ### deploy.bat 一発で済ませる
 
-初回のリポジトリ作成と `git remote add` さえ済んでいれば、以降は
-`deploy.bat` をダブルクリックするだけでよい。
-
-1. `git add -A` → `git commit` → `git push`
-2. **GitHub Pages が新しいファイルを配信し始めるまで待つ**
-   （ローカルの `index.html` と公開中のファイルのハッシュを照合する）
-3. 反映を確認してからブラウザで開く
-
-公開URLは `git remote` から自動で組み立てるので、バッチ内にURLを書く必要はない。
+`deploy.bat` をダブルクリックするだけ。中身は `deploy.ps1` を呼ぶだけの
+ランチャーで、処理の実体は PowerShell 側にある。
 
 ```
 deploy.bat                  自動メッセージでコミットして公開
 deploy.bat "変更内容"        メッセージを指定
-deploy.bat /open            git を飛ばして公開ページを開くだけ
-deploy.bat /private         シークレットウィンドウで開く（表示確認用）
+deploy.bat -OpenOnly        git を飛ばして公開ページを開くだけ
+deploy.bat -Private         シークレットウィンドウで開く（表示確認用）
 ```
 
-「pushしたのに古い画面が出る」の正体は、GitHub Pages の配信キャッシュ（10分程度）
-だった。バッチが実際の配信内容を照合してから開くので、この待ち時間を意識しなくてよい。
+やっていること:
 
-`/private` はキャッシュもService Workerも引き継がない状態で確認できるが、
-**記録は保存されない**ので表示確認専用。
+1. **バージョン刻印** — `?v=<日時>` を `index.html` と `js/app.js` に書き込む
+2. `git add` → `commit` → `push`
+3. **実際に配信されている内容と照合**して、反映されるまで待つ
+4. ブラウザで開く
+
+**バッチではなく PowerShell で書いている理由**: 文字列置換・ハッシュ計算・
+HTTP取得・パス操作が素直に書ける。batch では `for /f "..." in (文字列)` が
+「ファイル名として読む」形になるなど、引用符とカッコの扱いで壊れやすく、
+実際に2回壊した。
+
+**照合は4ファイル**（`index.html` / `js/app.js` / `css/style.css` /
+`js/domain.js`）で行う。`index.html` だけ見ていると、`app.js` だけの変更を
+「反映済み」と誤判定する（これも実際に起きた）。
 
 ### 手動でやる場合（Windows のターミナル）
 
