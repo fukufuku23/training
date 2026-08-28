@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>音声ガイド 動作チェック</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ink:#1F2A24; --muted:#5F6E66; --canvas:#F5F8F5; --surface:#fff;
+    --accent:#15803D; --wash:#E4F2E9; --border:#DCE5DE; --ng:#C0392B; --warn:#B45309;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 48px;background:var(--canvas);color:var(--ink);
+    font-family:"Inter","Yu Gothic UI","Hiragino Sans",system-ui,sans-serif;line-height:1.6}
+  main{max-width:640px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 20px}
+  section{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    padding:16px;margin-bottom:12px}
+  h2{font-size:14px;margin:0 0 10px}
+  .row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;font-size:13px;
+    border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:0}
+  .row b{flex:none;width:22px;text-align:center}
+  .k{flex:none;width:150px;color:var(--muted)}
+  .v{flex:1;min-width:0;word-break:break-word}
+  .ok{color:var(--accent)} .ng{color:var(--ng)} .warn{color:var(--warn)}
+  button{appearance:none;border:1.5px solid var(--accent);background:var(--accent);
+    color:#fff;border-radius:10px;min-height:46px;padding:0 18px;font-size:14px;
+    font-weight:700;cursor:pointer;font-family:inherit}
+  button.sec{background:var(--surface);color:var(--accent)}
+  button:disabled{opacity:.5;cursor:default}
+  .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  select{width:100%;min-height:42px;border:1px solid var(--border);border-radius:9px;
+    padding:0 10px;font-family:inherit;font-size:14px;background:var(--surface);color:inherit;margin-bottom:10px}
+  .note{font-size:12px;color:var(--muted);margin-top:10px}
+  #log{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;
+    background:var(--wash);border-radius:9px;padding:10px;margin-top:10px;min-height:40px}
+</style>
+</head>
+<body>
+<main>
+  <h1>音声ガイド 動作チェック</h1>
+  <p class="sub">この端末・このブラウザで音声ガイドが実現できるかを確認します。</p>
+
+  <section>
+    <h2>対応状況</h2>
+    <div id="support"></div>
+    <div id="voice-row"></div>
+  </section>
+
+  <section>
+    <h2>日本語の音声</h2>
+    <select id="voices"></select>
+    <div class="btns">
+      <button id="speak">コーチの掛け声を再生</button>
+      <button id="count" class="sec">カウントダウンを再生</button>
+    </div>
+    <p class="note">音が出ない場合は、端末のメディア音量とサイレントスイッチを確認してください。</p>
+  </section>
+
+  <section>
+    <h2>画面の点灯維持（Wake Lock）</h2>
+    <div class="btns">
+      <button id="wake" class="sec">取得を試す</button>
+      <button id="wakeoff" class="sec" disabled>解除</button>
+    </div>
+    <div id="log">まだ試していません</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const row = (ok, k, v) =>
+  `<div class="row"><b class="${ok===true?'ok':ok===false?'ng':'warn'}">${ok===true?'○':ok===false?'×':'△'}</b>` +
+  `<span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+/* ---------- 対応状況 ---------- */
+const hasTTS = 'speechSynthesis' in window;
+const hasWake = 'wakeLock' in navigator;
+const secure = window.isSecureContext;
+const ua = navigator.userAgent;
+const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+let html = '';
+html += row(hasTTS, '音声合成 API', hasTTS ? '利用できます' : 'この環境では使えません');
+html += row(secure, '安全なコンテキスト', secure ? 'HTTPS または localhost' : 'http のため一部機能が制限されます');
+html += row(hasWake, 'Wake Lock API', hasWake ? '画面の点灯を維持できます' : '非対応（画面が消えると停止します）');
+html += row(isIOS ? 'warn' : true, 'プラットフォーム',
+  isIOS ? 'iOS：バックグラウンドや画面ロックで音声が止まります'
+        : 'PC / Android：バックグラウンドでも比較的安定します');
+$('support').innerHTML = html;
+
+/* ---------- 音声一覧 ---------- */
+let jaVoices = [];
+function loadVoices() {
+  if (!hasTTS) { $('voices').innerHTML = '<option>利用できません</option>'; return; }
+  const all = speechSynthesis.getVoices();
+  jaVoices = all.filter(v => (v.lang || '').toLowerCase().startsWith('ja'));
+  const sel = $('voices');
+  if (jaVoices.length === 0) {
+    sel.innerHTML = '<option>日本語の音声が見つかりません</option>';
+    // 追記ではなく差し替え。voiceschanged で複数回呼ばれても行が増えない
+    $('voice-row').innerHTML = row(false, '日本語音声',
+      `検出 0 件（全 ${all.length} 件）。読み込み中の可能性があるため数秒待ってから再読込してください。`);
+    return;
+  }
+  sel.innerHTML = jaVoices.map((v, i) =>
+    `<option value="${i}">${v.name}（${v.lang}）${v.localService ? ' ・ 端末内' : ' ・ ネット経由'}</option>`
+  ).join('');
+  const local = jaVoices.filter(v => v.localService).length;
+  $('voice-row').innerHTML = row(true, '日本語音声',
+    `${jaVoices.length} 件（うち端末内 ${local} 件 / 全 ${all.length} 件）`);
+}
+if (hasTTS) {
+  loadVoices();
+  speechSynthesis.addEventListener('voiceschanged', loadVoices);
+}
+
+function say(text, rate = 1.0) {
+  if (!hasTTS) return;
+  const u = new SpeechSynthesisUtterance(text);
+  const i = parseInt($('voices').value, 10);
+  if (jaVoices[i]) u.voice = jaVoices[i];
+  u.lang = 'ja-JP'; u.rate = rate; u.pitch = 1;
+  speechSynthesis.speak(u);
+}
+
+$('speak').addEventListener('click', () => {
+  speechSynthesis.cancel();
+  say('次はスクワット。3セット行きます。');
+  setTimeout(() => say('1セット目、スタート'), 2600);
+});
+
+$('count').addEventListener('click', () => {
+  speechSynthesis.cancel();
+  say('20秒キープ');
+  const seq = [['残り10秒', 2200], ['5', 3400], ['4', 4400], ['3', 5400], ['2', 6400], ['1', 7400], ['はい、休憩', 8500]];
+  seq.forEach(([t, ms]) => setTimeout(() => say(t, 1.15), ms));
+});
+
+/* ---------- Wake Lock ---------- */
+let lock = null;
+$('wake').addEventListener('click', async () => {
+  if (!hasWake) { $('log').textContent = 'この環境では Wake Lock を利用できません。'; return; }
+  try {
+    lock = await navigator.wakeLock.request('screen');
+    $('log').textContent = '取得しました。このページを開いている間、画面が消えません。';
+    $('wakeoff').disabled = false;
+    lock.addEventListener('release', () => {
+      $('log').textContent = '解除されました（タブを離れると自動的に解除されます）。';
+      $('wakeoff').disabled = true;
+    });
+  } catch (e) {
+    $('log').textContent = '取得できませんでした: ' + e.message;
+  }
+});
+$('wakeoff').addEventListener('click', async () => {
+  if (lock) { await lock.release(); lock = null; }
+});
+</script>
+</body>
+</html>

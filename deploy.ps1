@@ -63,7 +63,11 @@ function Open-Site {
   else { Start-Process $site }
 }
 
-if ($OpenOnly) { Open-Site; Read-Host "`nEnter で終了"; exit 0 }
+if ($OpenOnly) {
+  Open-Site
+  if ($Private) { Read-Host "`nEnter で終了" }   # 注意書きを読ませたいときだけ残す
+  exit 0
+}
 
 # --------------------------------------------------------- バージョン刻印
 # GitHub Pages は js/css を max-age=600 で配信する。
@@ -122,11 +126,17 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 5
 }
 
+# ブラウザは Start-Process で独立したプロセスとして起動するため、
+# このウィンドウを閉じてもアプリには影響しない。
+# 正常に終わったら自動で閉じ、問題があったときだけ内容を読めるよう残す。
 if ($ready) {
   Write-Host "`n反映されました（照合したファイルすべて一致）。" -ForegroundColor Green
-} else {
-  Write-Host "`n[警告] 時間内に反映が確認できませんでした。古い内容が表示される可能性があります。" -ForegroundColor Yellow
+  Open-Site
+  if ($Private) { Read-Host "`nEnter で終了" }
+  exit 0
 }
 
+Write-Host "`n[警告] 時間内に反映が確認できませんでした。古い内容が表示される可能性があります。" -ForegroundColor Yellow
+Write-Host "        数分おいて再実行するか、ブラウザで Ctrl+Shift+R を押してください。"
 Open-Site
 Read-Host "`nEnter で終了"
