@@ -36,7 +36,7 @@
   select{width:100%;min-height:42px;border:1px solid var(--border);border-radius:9px;
     padding:0 10px;font-family:inherit;font-size:14px;background:var(--surface);color:inherit;margin-bottom:10px}
   .note{font-size:12px;color:var(--muted);margin-top:10px}
-  #log{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;
+  #log,#vvlog{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;
     background:var(--wash);border-radius:9px;padding:10px;margin-top:10px;min-height:40px}
 </style>
 </head>
@@ -59,6 +59,21 @@
       <button id="count" class="sec">カウントダウンを再生</button>
     </div>
     <p class="note">音が出ない場合は、端末のメディア音量とサイレントスイッチを確認してください。</p>
+  </section>
+
+  <section>
+    <h2>VOICEVOX（PCにインストールされている場合）</h2>
+    <p class="note" style="margin-top:0">
+      VOICEVOX を起動した状態で試してください。ローカルAPI（127.0.0.1:50021）に
+      接続できるかを確認します。
+    </p>
+    <div id="vvstatus"></div>
+    <select id="vvspeakers" style="display:none"></select>
+    <div class="btns">
+      <button id="vvcheck" class="sec">接続を確認</button>
+      <button id="vvspeak" disabled>この声で再生</button>
+    </div>
+    <div id="vvlog">まだ試していません</div>
   </section>
 
   <section>
@@ -139,6 +154,95 @@ $('count').addEventListener('click', () => {
   say('20秒キープ');
   const seq = [['残り10秒', 2200], ['5', 3400], ['4', 4400], ['3', 5400], ['2', 6400], ['1', 7400], ['はい、休憩', 8500]];
   seq.forEach(([t, ms]) => setTimeout(() => say(t, 1.15), ms));
+});
+
+/* ---------- VOICEVOX ---------- */
+const VV = 'http://127.0.0.1:50021';
+let vvSpeakers = [];
+
+async function vvFetch(path, opts = {}, ms = 8000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(VV + path, { ...opts, signal: ctl.signal }); }
+  finally { clearTimeout(t); }
+}
+
+$('vvcheck').addEventListener('click', async () => {
+  $('vvstatus').innerHTML = '';
+  $('vvlog').textContent = '確認しています...';
+  try {
+    const t0 = performance.now();
+    const res = await vvFetch('/version');
+    const ver = (await res.text()).replace(/"/g, '');
+    const ms = Math.round(performance.now() - t0);
+    $('vvstatus').innerHTML = row(true, 'エンジン', `接続できました（v${ver} / ${ms}ms）`);
+
+    const sp = await (await vvFetch('/speakers')).json();
+    vvSpeakers = [];
+    sp.forEach(s => s.styles.forEach(st =>
+      vvSpeakers.push({ id: st.id, label: `${s.name}（${st.name}）` })));
+    const sel = $('vvspeakers');
+    sel.style.display = 'block';
+    sel.innerHTML = vvSpeakers.map(v => `<option value="${v.id}">${v.label}</option>`).join('');
+    $('vvstatus').insertAdjacentHTML('beforeend',
+      row(true, '話者', `${vvSpeakers.length} 種類`));
+    $('vvspeak').disabled = false;
+    $('vvlog').textContent = '接続できました。「この声で再生」で音質と応答速度を確認してください。';
+  } catch (e) {
+    $('vvstatus').innerHTML = row(false, 'エンジン', '接続できませんでした');
+    $('vvlog').textContent =
+      'VOICEVOX が起動していないか、接続が拒否されています。\n' +
+      '・VOICEVOX を起動してから、もう一度お試しください\n' +
+      '・起動しているのに失敗する場合は、CORS の許可が必要な可能性があります\n' +
+      '  （このページの表示元: ' + location.origin + '）\n' +
+      'エラー: ' + e.message;
+  }
+});
+
+$('vvspeak').addEventListener('click', async () => {
+  const id = $('vvspeakers').value;
+  const text = '次はスクワット。3セット行きます。';
+  $('vvlog').textContent = '音声を生成しています...';
+  let timing = '';
+  try {
+    const t0 = performance.now();
+    const q = await vvFetch(`/audio_query?text=${encodeURIComponent(text)}&speaker=${id}`,
+      { method: 'POST' });
+    if (!q.ok) throw new Error('audio_query が ' + q.status + ' を返しました');
+    const query = await q.json();
+    const t1 = performance.now();
+
+    const wav = await vvFetch(`/synthesis?speaker=${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(query),
+    }, 20000);
+    if (!wav.ok) throw new Error('synthesis が ' + wav.status + ' を返しました');
+    const blob = await wav.blob();
+    const t2 = performance.now();
+
+    // 生成の計測値は再生の成否に関わらず出す（ここが判断材料になるため）
+    const total = Math.round(t2 - t0);
+    timing =
+      `  解析:     ${Math.round(t1 - t0)} ms\n` +
+      `  音声生成: ${Math.round(t2 - t1)} ms\n` +
+      `  合計:     ${total} ms（${Math.round(blob.size / 1024)} KB）\n` +
+      (total > 1200
+        ? '→ 秒読みには遅いため、実装では文言を事前生成してキャッシュします。'
+        : '→ 十分に速いので、その場で生成しても間に合います。');
+
+    try {
+      const audio = new Audio(URL.createObjectURL(blob));
+      await audio.play();
+      $('vvlog').textContent = '再生しました。\n' + timing;
+    } catch (playErr) {
+      $('vvlog').textContent =
+        '生成は成功しましたが、再生できませんでした（音量やデータを確認してください）。\n' +
+        timing + '\n  再生エラー: ' + playErr.message;
+    }
+  } catch (e) {
+    $('vvlog').textContent = '生成に失敗しました: ' + e.message + (timing ? '\n' + timing : '');
+  }
 });
 
 /* ---------- Wake Lock ---------- */
