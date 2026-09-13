@@ -42,7 +42,19 @@ Write-Host "---------------------------------------------------------------`n"
 # app.js / style.css の変更を取りこぼすので複数見る。
 $targets = @('index.html', 'js/app.js', 'css/style.css', 'js/domain.js')
 
+# 開くURLにも刻印を付ける。
+# js/css は ?v= で確実に破棄できるが、index.html 自身は max-age=600 で
+# ブラウザにキャッシュされる。素のURLで開くと、古い index.html が返り、
+# そこに書かれた古い ?v= を読みに行くので、配信しても反映されない。
+# クエリを変えればHTTPキャッシュの別エントリになるため、必ず取りに行く。
+$script:bust = Get-Date -Format 'yyyyMMddHHmmss'
+function Get-SiteUrl {
+  $sep = if ($site.Contains('?')) { '&' } else { '?' }
+  return "$site$sep" + "v=$script:bust"
+}
+
 function Open-Site {
+  $url = Get-SiteUrl
   $chrome = @(
     "$env:LocalAppData\Google\Chrome\Application\chrome.exe",
     "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
@@ -52,15 +64,15 @@ function Open-Site {
   if ($Private) {
     if ($chrome) {
       Write-Host "`nシークレットウィンドウで開きます..."
-      Start-Process $chrome -ArgumentList '--incognito', $site
+      Start-Process $chrome -ArgumentList '--incognito', $url
       Write-Host "※ シークレットでは記録が保存されません。表示確認専用です。" -ForegroundColor Yellow
       return
     }
     Write-Host "[警告] Chrome が見つからないため通常ウィンドウで開きます。" -ForegroundColor Yellow
   }
-  Write-Host "`n$site を開きます"
-  if ($chrome) { Start-Process $chrome -ArgumentList '--new-window', $site }
-  else { Start-Process $site }
+  Write-Host "`n$url を開きます"
+  if ($chrome) { Start-Process $chrome -ArgumentList '--new-window', $url }
+  else { Start-Process $url }
 }
 
 if ($OpenOnly) {
@@ -85,6 +97,7 @@ foreach ($p in $targets) {
   $t = [regex]::Replace($t, '\?v=[0-9A-Za-z]+', "?v=$stamp")
   [IO.File]::WriteAllText($p, $t, $utf8)
 }
+$script:bust = $stamp   # 開くURLと中身の刻印を揃える
 Write-Host "バージョンを刻印しました: $stamp"
 
 # --------------------------------------------------------------- commit / push
