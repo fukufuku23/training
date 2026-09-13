@@ -10,7 +10,7 @@
  *  3. 一時停止は締切そのものをずらす。止めている間の時間は無かったことにする。
  */
 
-import { REST_SEC_STRENGTH } from "./domain.js?v=20260913160555";
+import { REST_SEC_STRENGTH } from "./domain.js?v=20260913160825";
 
 /** その種目が時間で終わるか（＝自動で進めてよいか） */
 export function isTimed(ex) {
