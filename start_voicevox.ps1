@@ -11,12 +11,13 @@
     start_voicevox.bat                     エンジンを起動
     start_voicevox.bat -CheckOnly          起動せず、現在の接続可否だけ調べる
     start_voicevox.bat -EnginePath D:\VOICEVOX
-                                           インストール先を明示（初回だけでよい。
-                                           見つかった場所は記憶される）
+                                           インストール先を明示（初回だけでよい）
 
-  補足: Chrome 142 以降、公開サイトから 127.0.0.1 への接続には
-        「ローカルネットワークへのアクセス」の許可がブラウザ側で必要。
-        エンジンが起動していても、ブラウザで許可しないと繋がらない。
+  うまくいかないときは、同じフォルダに出る次のログを見る:
+    start_voicevox.log    このスクリプトの全出力
+    engine.*.out.log      エンジンの標準出力
+    engine.*.err.log      エンジンのエラー出力
+    engine.help.log       エンジンが受け付けるオプション一覧
 #>
 [CmdletBinding()]
 param(
@@ -28,9 +29,21 @@ $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $PORT = 50021
 $CONFIG = Join-Path $PSScriptRoot 'start_voicevox.local.txt'
+$LOG = Join-Path $PSScriptRoot 'start_voicevox.log'
+
+try { Start-Transcript -LiteralPath $LOG -Force | Out-Null } catch { }
 
 function Note($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
-function Fail($m) { Write-Host "`n[エラー] $m" -ForegroundColor Red; Read-Host "`nEnter で終了"; exit 1 }
+function Done($code) {
+  Note "`nログ: $LOG"
+  try { Stop-Transcript | Out-Null } catch { }
+  Read-Host "`nEnter で終了" | Out-Null
+  exit $code
+}
+function Fail($m) { Write-Host "`n[エラー] $m" -ForegroundColor Red; Done 1 }
+
+Note "実行日時: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Note "PowerShell: $($PSVersionTable.PSVersion)"
 
 # ------------------------------------------------ 許可するオリジンを git から導出
 $origin = $null
@@ -68,24 +81,21 @@ function Test-OriginAllowed {
 if (Test-Port) {
   if (Test-OriginAllowed) {
     Note "すでにエンジンが起動していて、$origin からの接続も許可されています。" Green
-    Note "このまま公開版で利用できます。"
-    Note "`n繋がらない場合はブラウザ側の許可を確認してください:"
-    Note "  アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可"
-    if (-not $CheckOnly) { Read-Host "`nEnter で終了" }
-    exit 0
+    Done 0
   }
   Note "ポート $PORT は使用中ですが、$origin は許可されていません。" Yellow
   Note "VOICEVOX（GUI）が起動している場合は終了してから、もう一度実行してください。"
-  Note "GUI のエンジンは既定設定のため、公開版からは接続できません。"
-  Read-Host "`nEnter で終了"
-  exit 1
+  Done 1
 }
 
-if ($CheckOnly) { Note "エンジンは起動していません。" Yellow; Read-Host "`nEnter で終了"; exit 0 }
+Note "ポート $PORT は空いています（エンジンは起動していません）。"
+if ($CheckOnly) { Done 0 }
 
 # --------------------------------------------------------- エンジンを探す
 # 与えられたパスが run.exe そのものでも、インストールフォルダでも受け付ける。
 function Resolve-RunExe([string]$path) {
+  if (-not $path) { return $null }
+  $path = $path.Trim([char]0xFEFF, ' ', "`t", "`r", "`n")
   if (-not $path) { return $null }
   if (-not (Test-Path -LiteralPath $path)) { return $null }
   if ((Get-Item -LiteralPath $path) -is [System.IO.FileInfo]) { return $path }
@@ -99,22 +109,17 @@ function Resolve-RunExe([string]$path) {
 $tried = New-Object System.Collections.Generic.List[string]
 
 function Find-Engine {
-  # 1) 明示指定
   if ($EnginePath) {
     $r = Resolve-RunExe $EnginePath
     if ($r) { return $r }
     Fail "指定された場所に run.exe が見つかりません: $EnginePath"
   }
-  # 2) 環境変数
   $r = Resolve-RunExe $env:VOICEVOX_ENGINE
   if ($r) { return $r }
-  # 3) 前回見つかった場所（記憶）
   if (Test-Path -LiteralPath $CONFIG) {
-    $saved = (Get-Content -LiteralPath $CONFIG -Raw).Trim()
-    $r = Resolve-RunExe $saved
+    $r = Resolve-RunExe ((Get-Content -LiteralPath $CONFIG -Raw))
     if ($r) { return $r }
   }
-  # 4) よくあるインストール先。固定ドライブすべてを見る（D:\VOICEVOX なども拾う）
   $roots = @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, "${env:ProgramFiles(x86)}")
   foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
     if ($d.DriveType -ne 'Fixed' -or -not $d.IsReady) { continue }
@@ -129,7 +134,6 @@ function Find-Engine {
       if (Test-Path -LiteralPath $c) { return $c }
     }
   }
-  # 5) 最後の手段: 固定ドライブの浅い階層から VOICEVOX フォルダを探す
   Note "既定の場所に見つからないため、検索します（少し時間がかかります）..." Yellow
   foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
     if ($d.DriveType -ne 'Fixed' -or -not $d.IsReady) { continue }
@@ -144,51 +148,118 @@ function Find-Engine {
 }
 
 $engine = Find-Engine
-
 if (-not $engine) {
   Note "探した場所:" Yellow
   $tried | Select-Object -First 12 | ForEach-Object { Note "  $_" }
   Fail ("VOICEVOX のエンジン（run.exe）が見つかりませんでした。`n" +
-        "        インストール先を指定して実行してください。例:`n" +
-        "          start_voicevox.bat -EnginePath D:\VOICEVOX")
+        "        例: start_voicevox.bat -EnginePath D:\VOICEVOX")
 }
 
-# 次回以降のために記憶しておく（このファイルは .gitignore 済み）
-try { Set-Content -LiteralPath $CONFIG -Value $engine -Encoding UTF8 } catch { }
+try { Set-Content -LiteralPath $CONFIG -Value $engine -Encoding ASCII } catch { }
 
+$engineDir = Split-Path -Parent $engine
 Note "エンジン: $engine"
-Note "起動しています... （このウィンドウを閉じるとエンジンも止まります）`n" Yellow
+Note "作業フォルダ: $engineDir`n"
 
-# --allow_origin は既定の許可（localhost など）に追加する形で働くため、
-# ローカル運用と公開版のどちらからでも使えるようになる。
-$proc = Start-Process -FilePath $engine `
-  -ArgumentList @('--allow_origin', $origin) `
-  -WorkingDirectory (Split-Path -Parent $engine) `
-  -PassThru -NoNewWindow
-
-# ---------------------------------------------------- 起動を待って結果を出す
-$deadline = (Get-Date).AddSeconds(90)
-$ok = $false
-Write-Host "起動待ち" -NoNewline
-while ((Get-Date) -lt $deadline) {
-  if ($proc.HasExited) { Write-Host ""; Fail "エンジンが起動直後に終了しました（終了コード $($proc.ExitCode)）。" }
-  Start-Sleep -Milliseconds 800
-  # 括弧で囲まないと Test-Port に "-and" という引数を渡す解釈になる
-  if ((Test-Port) -and (Test-OriginAllowed)) { $ok = $true; break }
-  Write-Host "." -NoNewline
+# --------------------------------------------------------- 起動する
+# 出力をログに落とす。起動に失敗したとき、理由はほぼ必ずここに出る。
+function Start-Engine([string[]]$argv, [string]$tag) {
+  $out = Join-Path $PSScriptRoot "engine.$tag.out.log"
+  $err = Join-Path $PSScriptRoot "engine.$tag.err.log"
+  Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
+  Note "起動コマンド: `"$engine`" $($argv -join ' ')"
+  return @{
+    Proc = (Start-Process -FilePath $engine -ArgumentList $argv `
+              -WorkingDirectory $engineDir -PassThru `
+              -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow)
+    Out = $out; Err = $err
+  }
 }
-Write-Host ""
 
-if ($ok) {
-  Note "`n起動しました。$origin から利用できます。" Green
-  Note ""
-  Note "ブラウザ側でもう1つ許可が要ります（Chrome 142 以降）:" Yellow
-  Note "  公開版のページを開き直すと「ローカルネットワークに接続しようとしています」と"
-  Note "  聞かれるので「許可」を選んでください。"
-  Note "  出ない場合: アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可"
+function Show-Log([string]$path, [string]$label) {
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  $txt = (Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue)
+  if (-not $txt -or -not $txt.Trim()) { return }
+  Note "`n--- $label ---" Yellow
+  ($txt -split "`n" | Select-Object -Last 25) | ForEach-Object { Note "  $_" }
+}
+
+# 起動待ち。初回はモデル読み込みで時間がかかるため長めに待つ。
+function Wait-Engine($h, [int]$seconds) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  $t0 = Get-Date
+  Write-Host "起動待ち" -NoNewline
+  while ((Get-Date) -lt $deadline) {
+    if ($h.Proc.HasExited) {
+      Write-Host ""
+      Note "エンジンが $([int]((Get-Date)-$t0).TotalSeconds) 秒で終了しました（終了コード $($h.Proc.ExitCode)）。" Red
+      return 'exited'
+    }
+    Start-Sleep -Milliseconds 800
+    # 括弧で囲まないと Test-Port に "-and" という引数を渡す解釈になる
+    if (Test-Port) {
+      Write-Host ""
+      Note "ポートが開きました（$([int]((Get-Date)-$t0).TotalSeconds) 秒）。" Green
+      return $(if (Test-OriginAllowed) { 'ok' } else { 'nocors' })
+    }
+    Write-Host "." -NoNewline
+  }
+  Write-Host ""
+  return 'timeout'
+}
+
+$h = Start-Engine @('--allow_origin', $origin) 'allow_origin'
+$result = Wait-Engine $h 180
+
+if ($result -eq 'exited') {
+  Show-Log $h.Err 'エンジンのエラー出力'
+  Show-Log $h.Out 'エンジンの標準出力'
+
+  # オプションが受け付けられなかった可能性を切り分ける
+  Note "`n受け付けるオプションを確認しています..." Yellow
+  $help = Join-Path $PSScriptRoot 'engine.help.log'
+  try {
+    Start-Process -FilePath $engine -ArgumentList @('--help') -WorkingDirectory $engineDir `
+      -RedirectStandardOutput $help -RedirectStandardError "$help.err" -NoNewWindow -Wait
+    Show-Log $help 'エンジンのオプション一覧'
+  } catch { Note "  取得できませんでした: $_" }
+
+  Note "`n--allow_origin なしでも起動しないか試します..." Yellow
+  $h2 = Start-Engine @() 'plain'
+  $r2 = Wait-Engine $h2 180
+  if ($r2 -eq 'ok' -or $r2 -eq 'nocors') {
+    Note "`n素の起動は成功しました。--allow_origin が原因です。" Yellow
+    Note "engine.help.log のオプション名を確認してください。"
+    Note "ローカル版（http://localhost:8080）からならこのまま使えます。" Green
+    Note "`n終了するには、このウィンドウを閉じるか Ctrl+C を押してください。"
+    try { Stop-Transcript | Out-Null } catch { }
+    try { Wait-Process -Id $h2.Proc.Id } catch { }
+    exit 0
+  }
+  Show-Log $h2.Err 'エンジンのエラー出力（素の起動）'
+  Fail "エンジン自体が起動しませんでした。上のログを確認してください。"
+}
+
+if ($result -eq 'timeout') {
+  Note "180秒待ちましたが、ポートが開きませんでした。" Yellow
+  Show-Log $h.Err 'エンジンのエラー出力'
+  Show-Log $h.Out 'エンジンの標準出力'
+  try { $h.Proc.Kill() } catch { }
+  Fail "起動を確認できませんでした。"
+}
+
+if ($result -eq 'nocors') {
+  Note "`nエンジンは起動しましたが、$origin は許可されていません。" Yellow
+  Note "engine.help.log / engine.allow_origin.out.log を確認してください。"
+  Note "ローカル版（http://localhost:8080）からなら利用できます。" Green
 } else {
-  Note "`n[警告] 起動を確認できませんでした。エンジンのログを確認してください。" Yellow
+  Note "`n起動しました。$origin から利用できます。" Green
 }
 
-Note "`n終了するには、このウィンドウを閉じるか Ctrl+C を押してください。"
-try { Wait-Process -Id $proc.Id } catch { }
+Note ""
+Note "ブラウザ側の許可が必要な場合があります（Chrome 142 以降）:" Yellow
+Note "  アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可"
+Note "`nログ: $LOG"
+Note "終了するには、このウィンドウを閉じるか Ctrl+C を押してください。"
+try { Stop-Transcript | Out-Null } catch { }
+try { Wait-Process -Id $h.Proc.Id } catch { }

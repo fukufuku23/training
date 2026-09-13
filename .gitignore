@@ -13,3 +13,8 @@ node_modules/
 
 # VOICEVOX のインストール先メモ（各自の環境依存）
 start_voicevox.local.txt
+
+# 起動診断ログ（環境依存。コミットしない）
+start_voicevox.log
+engine.*.log
+engine.*.log.err

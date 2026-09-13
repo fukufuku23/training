@@ -157,76 +157,128 @@ $('count').addEventListener('click', () => {
 });
 
 /* ---------- VOICEVOX ---------- */
-const VV = 'http://127.0.0.1:50021';
+// ブラウザからの呼び方は1通りではない。環境によって通る組み合わせが違うので、
+// 決め打ちにせず「実際に通ったもの」を探して、それを以降ずっと使う。
+//   - ホスト: エンジンは "localhost" にバインドされる。Windows では localhost が
+//             ::1（IPv6）に先に解決されることがあり、127.0.0.1 と挙動が分かれる。
+//   - targetAddressSpace: Chrome 142 以降のローカルネットワーク制限向けの注釈。
+//             付けると通る環境もあれば、付けると逆に弾かれる環境もある。
+const VV_BASES = ['http://127.0.0.1:50021', 'http://localhost:50021'];
+const VV_MODES = [
+  { key: 'plain', label: '通常', init: {} },
+  { key: 'tas',   label: 'targetAddressSpace付き', init: { targetAddressSpace: 'local' } },
+];
+
+let vvBase = VV_BASES[0];
+let vvInit = {};
+let vvReady = false;
 let vvSpeakers = [];
 
-// Chrome 142 以降、公開サイト（https）からローカルネットワーク（127.0.0.1 を含む）への
-// リクエストは Local Network Access の許可が要る。targetAddressSpace を付けると
-// Chrome が「ローカル宛」と認識し、混在コンテンツの例外と許可ダイアログが正しく働く。
-// 非対応ブラウザは未知のオプションを無視するだけなので、そのまま付けて問題ない。
-async function vvFetch(path, opts = {}, ms = 8000) {
+function withTimeout(ms) {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms);
-  try {
-    return await fetch(VV + path, {
-      ...opts, signal: ctl.signal, targetAddressSpace: 'local'
-    });
-  } finally { clearTimeout(t); }
+  return { signal: ctl.signal, done: setTimeout(() => ctl.abort(), ms) };
 }
 
-// 失敗理由の切り分け。fetch はどの原因でも一律 "Failed to fetch" しか返さないため、
-// ポートが開いているか（no-cors で判定）と許可の状態を別々に調べる。
-async function vvDiagnose(err) {
-  const lines = [];
-  const isPublic = location.protocol === 'https:' &&
-                   !/^(localhost|127\.|\[::1\])/.test(location.hostname);
+async function vvFetch(path, opts = {}, ms = 8000) {
+  const t = withTimeout(ms);
+  try { return await fetch(vvBase + path, { ...opts, ...vvInit, signal: t.signal }); }
+  finally { clearTimeout(t.done); }
+}
 
-  // 許可の状態（対応していないブラウザでは取れない）
+// 1組だけ試す。成功したかどうかと、失敗した場合の理由を返す。
+async function vvTry(base, mode) {
+  const name = `${base.replace('http://', '')} / ${mode.label}`;
+  const t = withTimeout(5000);
+  try {
+    const r = await fetch(base + '/version',
+      { ...mode.init, cache: 'no-store', signal: t.signal });
+    return { name, ok: r.ok, detail: `HTTP ${r.status}` };
+  } catch (e) {
+    return { name, ok: false, detail: e.name === 'AbortError' ? 'タイムアウト' : e.message };
+  } finally { clearTimeout(t.done); }
+}
+
+// fetch 固有の問題か、通信そのものが止められているかを分けるために XHR でも試す。
+function vvTryXhr(base) {
+  return new Promise(resolve => {
+    const name = `${base.replace('http://', '')} / XMLHttpRequest`;
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', base + '/version', true);
+      x.timeout = 5000;
+      x.onload = () => resolve({ name, ok: x.status >= 200 && x.status < 300, detail: `HTTP ${x.status}` });
+      x.onerror = () => resolve({ name, ok: false, detail: 'ネットワークエラー' });
+      x.ontimeout = () => resolve({ name, ok: false, detail: 'タイムアウト' });
+      x.send();
+    } catch (e) { resolve({ name, ok: false, detail: e.message }); }
+  });
+}
+
+// 通る組み合わせを探す。見つかればそれを記憶し、以降の呼び出しに使う。
+async function vvProbe() {
+  const results = [];
+  for (const base of VV_BASES) {
+    for (const mode of VV_MODES) {
+      const r = await vvTry(base, mode);
+      results.push(r);
+      if (r.ok) { vvBase = base; vvInit = mode.init; vvReady = true; return { ok: true, results }; }
+    }
+  }
+  for (const base of VV_BASES) results.push(await vvTryXhr(base));
+  return { ok: false, results };
+}
+
+function vvReport(results) {
+  const lines = ['試した組み合わせ:'];
+  results.forEach(r => lines.push(`  ${r.ok ? 'OK  ' : 'NG  '}${r.name}  —  ${r.detail}`));
+  return lines.join('\n');
+}
+
+async function vvExplain(results) {
+  const lines = [vvReport(results), ''];
+  const xhrOk = results.some(r => r.ok && r.name.includes('XMLHttpRequest'));
+
   let perm = null;
   try { perm = (await navigator.permissions.query({ name: 'local-network-access' })).state; }
   catch (_) { /* 非対応 */ }
 
-  // ポートが開いているかだけを見る（no-cors なら CORS 判定を通らない）
-  let portOpen = null;
-  try {
-    await fetch(VV + '/version',
-      { mode: 'no-cors', cache: 'no-store', targetAddressSpace: 'local' });
-    portOpen = true;
-  } catch (_) { portOpen = false; }
-
-  if (portOpen) {
-    lines.push('エンジンは起動しています（ポート 50021 に到達できました）。');
-    lines.push('CORS で拒否されています。start_voicevox.bat から起動し直してください。');
-    lines.push('（VOICEVOX の GUI が起動している場合は先に終了してください）');
-  } else if (isPublic) {
-    lines.push('ポート 50021 に到達できませんでした。原因は次のどちらかです。');
-    lines.push('');
-    lines.push('(1) Chrome の「ローカルネットワークへのアクセス」が未許可');
-    lines.push('    Chrome 142 以降、公開サイトから 127.0.0.1 への接続には許可が要ります。');
-    lines.push('    アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可');
-    lines.push('    許可ダイアログが出た場合は「許可」を選んでから再試行してください。');
-    if (perm) lines.push('    現在の許可状態: ' + perm);
-    lines.push('');
-    lines.push('(2) VOICEVOX エンジンが起動していない');
-    lines.push('    start_voicevox.bat -CheckOnly で起動状態を確認できます。');
+  if (xhrOk) {
+    lines.push('XMLHttpRequest では通り、fetch では弾かれています。');
+    lines.push('拡張機能などが fetch を横取りしている可能性が高いです。');
   } else {
-    lines.push('ポート 50021 に到達できませんでした。');
-    lines.push('VOICEVOX を起動してから、もう一度お試しください。');
+    lines.push('どの方法でもブラウザからエンジンに届いていません。');
+    lines.push('エンジン側のログに接続の記録が残らない場合、原因はブラウザの外側です。');
+    lines.push('');
+    lines.push('確認する順に:');
+    lines.push('  1. 拡張機能。シークレットウィンドウ（拡張機能が無効）で同じページを開いて試す');
+    lines.push('  2. セキュリティソフトのWeb保護・HTTPSスキャン機能');
+    lines.push('  3. エンジンが起動しているか（start_voicevox.bat -CheckOnly）');
   }
   lines.push('');
-  lines.push('表示元: ' + location.origin + '  /  エラー: ' + err.message);
+  lines.push('表示元: ' + location.origin);
+  if (perm) lines.push('ローカルネットワーク許可: ' + perm);
   return lines.join('\n');
 }
 
 $('vvcheck').addEventListener('click', async () => {
   $('vvstatus').innerHTML = '';
-  $('vvlog').textContent = '確認しています...';
+  $('vvlog').textContent = '接続できる組み合わせを探しています...';
+
+  const probe = await vvProbe();
+  if (!probe.ok) {
+    $('vvstatus').innerHTML = row(false, 'エンジン', '接続できませんでした');
+    $('vvlog').textContent = await vvExplain(probe.results);
+    return;
+  }
+
   try {
     const t0 = performance.now();
-    const res = await vvFetch('/version');
-    const ver = (await res.text()).replace(/"/g, '');
+    const ver = (await (await vvFetch('/version')).text()).replace(/"/g, '');
     const ms = Math.round(performance.now() - t0);
     $('vvstatus').innerHTML = row(true, 'エンジン', `接続できました（v${ver} / ${ms}ms）`);
+    $('vvstatus').insertAdjacentHTML('beforeend',
+      row(true, '経路', vvBase.replace('http://', '') +
+        (vvInit.targetAddressSpace ? ' / targetAddressSpace付き' : ' / 通常')));
 
     const sp = await (await vvFetch('/speakers')).json();
     vvSpeakers = [];
@@ -238,11 +290,11 @@ $('vvcheck').addEventListener('click', async () => {
     $('vvstatus').insertAdjacentHTML('beforeend',
       row(true, '話者', `${vvSpeakers.length} 種類`));
     $('vvspeak').disabled = false;
-    $('vvlog').textContent = '接続できました。「この声で再生」で音質と応答速度を確認してください。';
+    $('vvlog').textContent =
+      vvReport(probe.results) + '\n\n「この声で再生」で音質と応答速度を確認してください。';
   } catch (e) {
-    $('vvstatus').innerHTML = row(false, 'エンジン', '接続できませんでした');
-    $('vvlog').textContent = '原因を調べています...';
-    $('vvlog').textContent = await vvDiagnose(e);
+    $('vvstatus').innerHTML = row(false, 'エンジン', '途中で失敗しました');
+    $('vvlog').textContent = vvReport(probe.results) + '\n\nエラー: ' + e.message;
   }
 });
 
