@@ -99,6 +99,34 @@ HTTP取得・パス操作が素直に書ける。batch では `for /f "..." in (
 `js/domain.js`）で行う。`index.html` だけ見ていると、`app.js` だけの変更を
 「反映済み」と誤判定する（これも実際に起きた）。
 
+### start_voicevox.bat（VOICEVOX を公開版から使う）
+
+PC に VOICEVOX がある場合、音声ガイドの声として使える。
+ただし VOICEVOX の既定の CORS 設定（`localapps`）は `app://` と localhost しか
+許可しないため、**公開版（github.io）からは弾かれる**。
+
+`start_voicevox.bat` は `--allow_origin https://<ユーザー名>.github.io` を付けて
+エンジンを起動する。許可するオリジンは `git remote` から自動で組み立てるので、
+スクリプトに URL を書く必要はない。
+
+```
+start_voicevox.bat             エンジンを起動（ウィンドウを閉じると停止）
+start_voicevox.bat -CheckOnly  起動せず、現在の接続可否だけ確認
+```
+
+**VOICEVOX の GUI が起動しているときは先に終了すること。** GUI が起動する
+エンジンは既定設定なので、ポートを占有したまま公開版からは接続できない。
+この状態はスクリプトが検出して案内する。
+
+エンジンの場所は `%LOCALAPPDATA%\Programs\VOICEVOX\vv-engine\run.exe`
+（v0.16 以降）。見つからない場合は自動で検索する。
+
+> なぜ公開版に統一するのか: `http://localhost:8080` と
+> `https://<ユーザー名>.github.io` は別オリジンなので **IndexedDB が分かれる**。
+> 音声ガイドのためにローカル運用を常用すると、スマホの記録とPCの記録が
+> 別々になってしまう。フェーズ2（Supabase同期）が入るまでは、
+> 公開版に寄せておくのが安全。
+
 ### 手動でやる場合（Windows のターミナル）
 
 1. GitHub で空のリポジトリを作る（README や .gitignore は追加しない）
