@@ -10,6 +10,91 @@
  *  - 発話は必ずキューで直列化する。重なると何を言っているか分からなくなる。
  */
 
+/* ------------------------------------------------------- 共有の音声出力先 */
+
+// AudioContext は VOICEVOX の再生と効果音で共用する。
+// ユーザー操作の前に作ると suspended のままなので、unlock() まで作らない。
+let sharedCtx = null;
+
+function audioCtx() {
+  if (!sharedCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    sharedCtx = new AC();
+  }
+  return sharedCtx;
+}
+
+/**
+ * 短い電子音。
+ *
+ * カウントダウンを読み上げにすると、合成の待ち時間ぶん遅れるうえ、
+ * 端末によっては数字を変な読み方をする。音なら遅れないし読み間違えない。
+ */
+export function beep({ freq = 880, ms = 90, gain = 0.16 } = {}) {
+  const ctx = audioCtx();
+  if (!ctx || ctx.state !== "running") return;
+  const t0 = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const amp = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  // 立ち上がり・立ち下がりを付けないと「プツッ」と鳴る
+  amp.gain.setValueAtTime(0, t0);
+  amp.gain.linearRampToValueAtTime(gain, t0 + 0.012);
+  amp.gain.setValueAtTime(gain, t0 + ms / 1000 - 0.03);
+  amp.gain.linearRampToValueAtTime(0, t0 + ms / 1000);
+  osc.connect(amp); amp.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0 + ms / 1000 + 0.02);
+}
+
+export const TONES = {
+  count: { freq: 760, ms: 90 },    // 3・2・1
+  go:    { freq: 1150, ms: 240 },  // 開始／終了
+  rest:  { freq: 520, ms: 180 },   // 休憩に入る
+};
+
+/**
+ * 読み上げ用にテキストを整える。
+ * 「懸垂(順手)」のような括弧は、そのままだと読み飛ばされたり
+ * 「かっこ」と読まれたりするので読点に開く。
+ */
+/**
+ * 読み間違いが起きやすい語の読みを与える。
+ * 正しく読める合成器にとっても、かなで渡して困ることはない。
+ * 迷う語だけを入れる（確信のない読みを入れると、かえって悪くなる）。
+ */
+const READINGS = [
+  [/順手/g, "じゅんて"],
+  [/逆手/g, "ぎゃくて"],
+  [/片脚/g, "かたあし"],
+  [/片足/g, "かたあし"],
+  [/側屈/g, "そっくつ"],
+  [/回旋/g, "かいせん"],
+  [/胸椎/g, "きょうつい"],
+  [/脊柱/g, "せきちゅう"],
+  [/肩甲骨/g, "けんこうこつ"],
+  [/大腿四頭筋/g, "だいたいしとうきん"],
+  [/腸腰筋/g, "ちょうようきん"],
+  [/広背筋/g, "こうはいきん"],
+  [/大胸筋/g, "だいきょうきん"],
+  [/内転筋/g, "ないてんきん"],
+  [/立位/g, "りつい"],
+  [/座位/g, "ざい"],
+  [/上体反らし/g, "じょうたいそらし"],
+];
+
+export function normalizeForSpeech(text) {
+  const out = String(text)
+    .replace(/[（(]\s*([^）)]*?)\s*[）)]/g, "、$1")
+    .replace(/[・･]/g, "、")
+    .replace(/\s*[／/]\s*/g, "、")
+    .replace(/、+/g, "、")
+    .replace(/、$/, "")
+    .trim();
+  return READINGS.reduce((acc, [re, kana]) => acc.replace(re, kana), out);
+}
+
 /* --------------------------------------------------------------- VOICEVOX */
 
 // 接続方法は決め打ちにしない。実測（Chrome 152 / Windows）では
@@ -60,11 +145,8 @@ class VoicevoxVoice {
 
   /** 再生用の AudioContext はユーザー操作のあとでないと開始できない */
   unlock() {
-    if (!this.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) throw new Error("AudioContext 非対応");
-      this.ctx = new AC();
-    }
+    this.ctx = audioCtx();
+    if (!this.ctx) return Promise.reject(new Error("AudioContext 非対応"));
     if (this.ctx.state === "suspended") return this.ctx.resume();
     return Promise.resolve();
   }
@@ -76,6 +158,8 @@ class VoicevoxVoice {
       { method: "POST" }, 8000);
     if (!q.ok) throw new Error(`audio_query ${q.status}`);
     const query = await q.json();
+    // 再生速度を playbackRate で変えると音程まで上がる。合成側の speedScale を使う
+    query.speedScale = 1.05;
     const w = await fetchWithTimeout(`${this.base}/synthesis?speaker=${this.speakerId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -99,13 +183,12 @@ class VoicevoxVoice {
     }
   }
 
-  async speak(text, { rate = 1 } = {}) {
+  async speak(text) {
     const buf = await this.synth(text);
     await this.unlock();
     return new Promise((resolve) => {
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
-      src.playbackRate.value = rate;
       src.connect(this.ctx.destination);
       src.onended = () => { this.source = null; resolve(); };
       this.source = src;
@@ -149,8 +232,14 @@ class WebSpeechVoice {
   async init() {
     await waitForVoices();
     const ja = japaneseVoices();
-    // ネットワーク合成より端末内蔵を優先する。オフラインでも切れない
-    this.voice = ja.find((v) => v.localService) || ja[0] || null;
+    // 端末内蔵を優先すると、Windows では古い機械的な声（Ayumi など）が選ばれる。
+    // 声の質はこの機能の体験そのものなので、自然な声を先に採る。
+    // オフラインでも切れないことより、聞き取りやすさを優先する判断。
+    this.voice =
+      ja.find((v) => /natural/i.test(v.name)) ||
+      ja.find((v) => /online|neural/i.test(v.name)) ||
+      ja.find((v) => v.localService) ||
+      ja[0] || null;
     if (this.voice) this.label = `ブラウザ標準（${this.voice.name}）`;
     return true;
   }
@@ -167,7 +256,7 @@ class WebSpeechVoice {
 
   async prefetch() { /* 事前生成は不要 */ }
 
-  speak(text, { rate = 1.05, pitch = 1 } = {}) {
+  speak(text, { rate = 1.0, pitch = 1 } = {}) {
     return new Promise((resolve) => {
       let settled = false;
       const finish = () => { if (!settled) { settled = true; resolve(); } };
@@ -198,6 +287,10 @@ class Voice {
     this.enabled = true;
     this.queue = Promise.resolve();
     this.stopped = false;
+    // 世代番号。stop() で進めると、すでに繋がっている発話も自分の世代を見て降りる。
+    // stopped フラグだけだと、stop() 直後に resume() した瞬間に
+    // 積み残しが動き出して声が重なる（スキップ時に起きていた）。
+    this.epoch = 0;
   }
 
   get label() {
@@ -226,6 +319,9 @@ class Voice {
   /** ユーザー操作の中で1回呼ぶ。これをしないと端末によっては音が出ない */
   async unlock() {
     this.stopped = false;
+    // 効果音は VOICEVOX を使わない場合も鳴らすので、ここで必ず起こしておく
+    try { const c = audioCtx(); if (c && c.state === "suspended") await c.resume(); }
+    catch (_) { }
     try { if (this.engine) await this.engine.unlock(); } catch (_) { }
     try { if (this.fallback && this.fallback !== this.engine) await this.fallback.unlock(); }
     catch (_) { }
@@ -241,25 +337,37 @@ class Voice {
    * VOICEVOX が失敗したらその場で Web Speech に切り替えて言い直す。
    */
   say(text, opts = {}) {
-    if (!text) return this.queue;
+    if (!text) return Promise.resolve();
+    const myEpoch = this.epoch;
+    const line = normalizeForSpeech(text);
     this.queue = this.queue.then(async () => {
+      // 自分より後に stop() が入っていたら、もう話す意味がない
+      if (myEpoch !== this.epoch) return;
       if (!this.enabled || this.stopped || !this.engine) return;
       try {
-        await this.engine.speak(text, opts);
+        await this.engine.speak(line, opts);
       } catch (err) {
+        if (myEpoch !== this.epoch) return;
         if (this.engine !== this.fallback && this.fallback) {
           console.warn("音声エンジンを切り替えます:", err && err.message);
           this.engine = this.fallback;
-          try { await this.engine.speak(text, opts); } catch (_) { }
+          try { await this.engine.speak(line, opts); } catch (_) { }
         }
       }
     }).catch(() => { });
     return this.queue;
   }
 
+  /** 効果音。読み上げのキューとは独立に、その場で鳴る */
+  tone(kind) {
+    if (!this.enabled) return;
+    beep(TONES[kind] || TONES.count);
+  }
+
   /** 今の発話を止め、積まれている分も捨てる */
   stop() {
     this.stopped = true;
+    this.epoch += 1;            // 積み残しを無効にする
     if (this.engine) this.engine.cancel();
     if (this.fallback && this.fallback !== this.engine) this.fallback.cancel();
     this.queue = Promise.resolve();

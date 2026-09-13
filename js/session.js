@@ -10,7 +10,7 @@
  *  3. 一時停止は締切そのものをずらす。止めている間の時間は無かったことにする。
  */
 
-import { REST_SEC_STRENGTH } from "./domain.js?v=20260913160825";
+import { REST_SEC_STRENGTH } from "./domain.js?v=20260913162025";
 
 /** その種目が時間で終わるか（＝自動で進めてよいか） */
 export function isTimed(ex) {
@@ -48,7 +48,8 @@ export function buildSteps(flat) {
                    phaseLabel: item.phaseLabel, seconds: 3 });
     }
 
-    steps.push({ kind: "announce", ex, sets, item, seconds: 4 });
+    // 予告の長さは読み上げが決める。ここは読み終わってからのひと呼吸ぶん
+    steps.push({ kind: "announce", ex, sets, item, seconds: 1 });
 
     for (let s = 1; s <= sets; s++) {
       steps.push({
@@ -90,20 +91,28 @@ export const PREFETCH_PHRASES = [
 function cuesFor(step, endAt, now) {
   const cues = [];
   const sec = step.seconds || 0;
+  const countdown = () => {
+    cues.push({ at: endAt - 3000, tone: "count" });
+    cues.push({ at: endAt - 2000, tone: "count" });
+    cues.push({ at: endAt - 1000, tone: "count" });
+    cues.push({ at: endAt - 150, tone: "go" });
+  };
   if (step.kind === "work" && step.mode === "timed") {
     if (sec >= 25) cues.push({ at: endAt - 10000, text: "残り10秒" });
-    if (sec >= 8) {
-      cues.push({ at: endAt - 3000, text: "3" });
-      cues.push({ at: endAt - 2000, text: "2" });
-      cues.push({ at: endAt - 1000, text: "1" });
-    }
+    if (sec >= 8) countdown();
   } else if (step.kind === "rest") {
     if (sec >= 20) cues.push({ at: endAt - 10000, text: "残り10秒" });
-    cues.push({ at: endAt - 3000, text: "3" });
-    cues.push({ at: endAt - 2000, text: "2" });
-    cues.push({ at: endAt - 1000, text: "1" });
+    countdown();
   }
   return cues.filter((c) => c.at > now + 200);
+}
+
+/** 読み上げが返ってこない端末があるので、待ち切りの上限を設ける */
+function withDeadline(promise, ms) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => { }),
+    new Promise((r) => setTimeout(r, ms)),
+  ]);
 }
 
 /** そのステップに入ったときに話す言葉。短い機能語に寄せる */
@@ -157,7 +166,14 @@ export class SessionRunner {
   get current() { return this.i >= 0 ? this.steps[this.i] : null; }
 
   get remainingMs() {
-    if (this.endAt == null) return null;
+    const st = this.current;
+    if (this.endAt == null) {
+      // 読み上げ待ちで時計がまだ動いていない間は、これから計る長さを見せる
+      if (st && st.seconds != null && !(st.kind === "work" && st.mode === "manual")) {
+        return st.seconds * 1000;
+      }
+      return null;
+    }
     const base = this.paused ? this.pausedAt : this.now();
     return Math.max(0, this.endAt - base);
   }
@@ -191,6 +207,10 @@ export class SessionRunner {
     this.paused = false;
     this.pausedAt = null;
     if (this.voice) this.voice.resume();
+    if (this.pendingStart && this.current) {
+      this.pendingStart = false;
+      this.startClock(this.current);
+    }
     this.emitState();
   }
 
@@ -237,19 +257,42 @@ export class SessionRunner {
     const st = this.steps[this.i];
     const line = openingLine(st);
 
+    this.endAt = null;
+    this.cues = [];
+    this.pendingStart = false;
+
+    if (this.on.step) this.on.step(st, this.i, this.steps.length);
+
+    // 回数ベースは終わる時刻が分からない。タップされるまで待つ
     if (st.kind === "work" && st.mode === "manual") {
-      // 機械には終わる時刻が分からない。タップされるまで待つ
-      this.endAt = null;
-      this.cues = [];
-    } else {
-      const sec = st.seconds || 0;
-      const t = this.now();
-      this.endAt = t + sec * 1000;
-      this.cues = cuesFor(st, this.endAt, t);
+      if (this.voice && line) this.voice.say(line);
+      this.emitState();
+      return;
     }
 
-    if (this.voice && line) this.voice.say(line);
-    if (this.on.step) this.on.step(st, this.i, this.steps.length);
+    // 予告と「スタート」は、言い終わってから時計を動かす。
+    // 同時に始めると、説明を読んでいる最中にカウントダウンが食い込む。
+    const speechFirst = st.kind === "announce"
+      || (st.kind === "work" && st.mode === "timed");
+
+    if (speechFirst && this.voice && line) {
+      const mark = this.i;
+      withDeadline(this.voice.say(line), 15000).then(() => {
+        if (this.i !== mark || this.finished) return;   // 先に進んでいたら何もしない
+        if (this.paused) { this.pendingStart = true; return; }
+        this.startClock(st);
+      });
+    } else {
+      if (this.voice && line) this.voice.say(line);
+      this.startClock(st);
+    }
+    this.emitState();
+  }
+
+  startClock(st) {
+    const t = this.now();
+    this.endAt = t + (st.seconds || 0) * 1000;
+    this.cues = cuesFor(st, this.endAt, t);
     this.emitState();
   }
 
@@ -260,7 +303,10 @@ export class SessionRunner {
     for (const c of this.cues) {
       if (!c.spoken && now >= c.at) {
         c.spoken = true;
-        if (this.voice) this.voice.say(c.text, { rate: 1.15 });
+        if (!this.voice) continue;
+        // 音は待たせない。読み上げのキューに積むと遅れて意味がなくなる
+        if (c.tone) this.voice.tone(c.tone);
+        else this.voice.say(c.text);
       }
     }
 

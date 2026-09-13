@@ -5,10 +5,10 @@
  * 判断はここではしない。ここにあるのは「何をどう見せるか」だけ。
  */
 
-import { voice } from "./voice.js?v=20260913160825";
-import { buildSteps, SessionRunner, estimateTotalSec, isTimed } from "./session.js?v=20260913160825";
-import { poseArt } from "./art.js?v=20260913160825";
-import { regionGroupOf, PHASE_META } from "./domain.js?v=20260913160825";
+import { voice } from "./voice.js?v=20260913162025";
+import { buildSteps, SessionRunner, estimateTotalSec, isTimed } from "./session.js?v=20260913162025";
+import { poseArt } from "./art.js?v=20260913162025";
+import { regionGroupOf, PHASE_META } from "./domain.js?v=20260913162025";
 
 const $ = (id) => document.getElementById(id);
 
