@@ -160,11 +160,62 @@ $('count').addEventListener('click', () => {
 const VV = 'http://127.0.0.1:50021';
 let vvSpeakers = [];
 
+// Chrome 142 以降、公開サイト（https）からローカルネットワーク（127.0.0.1 を含む）への
+// リクエストは Local Network Access の許可が要る。targetAddressSpace を付けると
+// Chrome が「ローカル宛」と認識し、混在コンテンツの例外と許可ダイアログが正しく働く。
+// 非対応ブラウザは未知のオプションを無視するだけなので、そのまま付けて問題ない。
 async function vvFetch(path, opts = {}, ms = 8000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), ms);
-  try { return await fetch(VV + path, { ...opts, signal: ctl.signal }); }
-  finally { clearTimeout(t); }
+  try {
+    return await fetch(VV + path, {
+      ...opts, signal: ctl.signal, targetAddressSpace: 'local'
+    });
+  } finally { clearTimeout(t); }
+}
+
+// 失敗理由の切り分け。fetch はどの原因でも一律 "Failed to fetch" しか返さないため、
+// ポートが開いているか（no-cors で判定）と許可の状態を別々に調べる。
+async function vvDiagnose(err) {
+  const lines = [];
+  const isPublic = location.protocol === 'https:' &&
+                   !/^(localhost|127\.|\[::1\])/.test(location.hostname);
+
+  // 許可の状態（対応していないブラウザでは取れない）
+  let perm = null;
+  try { perm = (await navigator.permissions.query({ name: 'local-network-access' })).state; }
+  catch (_) { /* 非対応 */ }
+
+  // ポートが開いているかだけを見る（no-cors なら CORS 判定を通らない）
+  let portOpen = null;
+  try {
+    await fetch(VV + '/version',
+      { mode: 'no-cors', cache: 'no-store', targetAddressSpace: 'local' });
+    portOpen = true;
+  } catch (_) { portOpen = false; }
+
+  if (portOpen) {
+    lines.push('エンジンは起動しています（ポート 50021 に到達できました）。');
+    lines.push('CORS で拒否されています。start_voicevox.bat から起動し直してください。');
+    lines.push('（VOICEVOX の GUI が起動している場合は先に終了してください）');
+  } else if (isPublic) {
+    lines.push('ポート 50021 に到達できませんでした。原因は次のどちらかです。');
+    lines.push('');
+    lines.push('(1) Chrome の「ローカルネットワークへのアクセス」が未許可');
+    lines.push('    Chrome 142 以降、公開サイトから 127.0.0.1 への接続には許可が要ります。');
+    lines.push('    アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可');
+    lines.push('    許可ダイアログが出た場合は「許可」を選んでから再試行してください。');
+    if (perm) lines.push('    現在の許可状態: ' + perm);
+    lines.push('');
+    lines.push('(2) VOICEVOX エンジンが起動していない');
+    lines.push('    start_voicevox.bat -CheckOnly で起動状態を確認できます。');
+  } else {
+    lines.push('ポート 50021 に到達できませんでした。');
+    lines.push('VOICEVOX を起動してから、もう一度お試しください。');
+  }
+  lines.push('');
+  lines.push('表示元: ' + location.origin + '  /  エラー: ' + err.message);
+  return lines.join('\n');
 }
 
 $('vvcheck').addEventListener('click', async () => {
@@ -190,12 +241,8 @@ $('vvcheck').addEventListener('click', async () => {
     $('vvlog').textContent = '接続できました。「この声で再生」で音質と応答速度を確認してください。';
   } catch (e) {
     $('vvstatus').innerHTML = row(false, 'エンジン', '接続できませんでした');
-    $('vvlog').textContent =
-      'VOICEVOX が起動していないか、接続が拒否されています。\n' +
-      '・VOICEVOX を起動してから、もう一度お試しください\n' +
-      '・起動しているのに失敗する場合は、CORS の許可が必要な可能性があります\n' +
-      '  （このページの表示元: ' + location.origin + '）\n' +
-      'エラー: ' + e.message;
+    $('vvlog').textContent = '原因を調べています...';
+    $('vvlog').textContent = await vvDiagnose(e);
   }
 });
 

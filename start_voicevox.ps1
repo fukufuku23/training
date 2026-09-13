@@ -8,18 +8,29 @@
   許可するオリジンは git remote から自動で組み立てるので、設定を書く必要はない。
 
   使い方:
-    start_voicevox.bat            エンジンを起動（このウィンドウが動いている間だけ有効）
-    start_voicevox.bat -CheckOnly 起動せず、現在の接続可否だけ調べる
+    start_voicevox.bat                     エンジンを起動
+    start_voicevox.bat -CheckOnly          起動せず、現在の接続可否だけ調べる
+    start_voicevox.bat -EnginePath D:\VOICEVOX
+                                           インストール先を明示（初回だけでよい。
+                                           見つかった場所は記憶される）
+
+  補足: Chrome 142 以降、公開サイトから 127.0.0.1 への接続には
+        「ローカルネットワークへのアクセス」の許可がブラウザ側で必要。
+        エンジンが起動していても、ブラウザで許可しないと繋がらない。
 #>
 [CmdletBinding()]
-param([switch]$CheckOnly)
+param(
+  [switch]$CheckOnly,
+  [string]$EnginePath
+)
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $PORT = 50021
+$CONFIG = Join-Path $PSScriptRoot 'start_voicevox.local.txt'
 
 function Note($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
-function Fail($m) { Write-Host "[エラー] $m" -ForegroundColor Red; Read-Host "Enter で終了"; exit 1 }
+function Fail($m) { Write-Host "`n[エラー] $m" -ForegroundColor Red; Read-Host "`nEnter で終了"; exit 1 }
 
 # ------------------------------------------------ 許可するオリジンを git から導出
 $origin = $null
@@ -58,6 +69,8 @@ if (Test-Port) {
   if (Test-OriginAllowed) {
     Note "すでにエンジンが起動していて、$origin からの接続も許可されています。" Green
     Note "このまま公開版で利用できます。"
+    Note "`n繋がらない場合はブラウザ側の許可を確認してください:"
+    Note "  アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可"
     if (-not $CheckOnly) { Read-Host "`nEnter で終了" }
     exit 0
   }
@@ -71,26 +84,77 @@ if (Test-Port) {
 if ($CheckOnly) { Note "エンジンは起動していません。" Yellow; Read-Host "`nEnter で終了"; exit 0 }
 
 # --------------------------------------------------------- エンジンを探す
-$candidates = @(
-  "$env:LOCALAPPDATA\Programs\VOICEVOX\vv-engine\run.exe",   # v0.16 以降
-  "$env:LOCALAPPDATA\Programs\VOICEVOX\run.exe",             # v0.15 以前
-  "$env:ProgramFiles\VOICEVOX\vv-engine\run.exe",
-  "${env:ProgramFiles(x86)}\VOICEVOX\vv-engine\run.exe"
-)
-$engine = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+# 与えられたパスが run.exe そのものでも、インストールフォルダでも受け付ける。
+function Resolve-RunExe([string]$path) {
+  if (-not $path) { return $null }
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  if ((Get-Item -LiteralPath $path) -is [System.IO.FileInfo]) { return $path }
+  foreach ($sub in @('vv-engine\run.exe', 'run.exe')) {
+    $c = Join-Path $path $sub
+    if (Test-Path -LiteralPath $c) { return $c }
+  }
+  return $null
+}
+
+$tried = New-Object System.Collections.Generic.List[string]
+
+function Find-Engine {
+  # 1) 明示指定
+  if ($EnginePath) {
+    $r = Resolve-RunExe $EnginePath
+    if ($r) { return $r }
+    Fail "指定された場所に run.exe が見つかりません: $EnginePath"
+  }
+  # 2) 環境変数
+  $r = Resolve-RunExe $env:VOICEVOX_ENGINE
+  if ($r) { return $r }
+  # 3) 前回見つかった場所（記憶）
+  if (Test-Path -LiteralPath $CONFIG) {
+    $saved = (Get-Content -LiteralPath $CONFIG -Raw).Trim()
+    $r = Resolve-RunExe $saved
+    if ($r) { return $r }
+  }
+  # 4) よくあるインストール先。固定ドライブすべてを見る（D:\VOICEVOX なども拾う）
+  $roots = @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, "${env:ProgramFiles(x86)}")
+  foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
+    if ($d.DriveType -ne 'Fixed' -or -not $d.IsReady) { continue }
+    $roots += $d.RootDirectory.FullName.TrimEnd('\')
+    $roots += (Join-Path $d.RootDirectory.FullName 'Program Files').TrimEnd('\')
+    $roots += (Join-Path $d.RootDirectory.FullName 'Program Files (x86)').TrimEnd('\')
+  }
+  foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+    foreach ($sub in @('VOICEVOX\vv-engine\run.exe', 'VOICEVOX\run.exe')) {
+      $c = Join-Path $root $sub
+      $tried.Add($c) | Out-Null
+      if (Test-Path -LiteralPath $c) { return $c }
+    }
+  }
+  # 5) 最後の手段: 固定ドライブの浅い階層から VOICEVOX フォルダを探す
+  Note "既定の場所に見つからないため、検索します（少し時間がかかります）..." Yellow
+  foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
+    if ($d.DriveType -ne 'Fixed' -or -not $d.IsReady) { continue }
+    $dirs = Get-ChildItem -LiteralPath $d.RootDirectory.FullName -Directory -Filter 'VOICEVOX*' `
+      -Depth 3 -ErrorAction SilentlyContinue
+    foreach ($dir in $dirs) {
+      $r = Resolve-RunExe $dir.FullName
+      if ($r) { return $r }
+    }
+  }
+  return $null
+}
+
+$engine = Find-Engine
 
 if (-not $engine) {
-  Note "既定の場所に見つからないため、検索します..." Yellow
-  foreach ($root in @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, "${env:ProgramFiles(x86)}")) {
-    if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
-    $found = Get-ChildItem -LiteralPath $root -Filter 'run.exe' -Recurse -ErrorAction SilentlyContinue |
-      Where-Object { $_.FullName -like '*VOICEVOX*' } | Select-Object -First 1
-    if ($found) { $engine = $found.FullName; break }
-  }
+  Note "探した場所:" Yellow
+  $tried | Select-Object -First 12 | ForEach-Object { Note "  $_" }
+  Fail ("VOICEVOX のエンジン（run.exe）が見つかりませんでした。`n" +
+        "        インストール先を指定して実行してください。例:`n" +
+        "          start_voicevox.bat -EnginePath D:\VOICEVOX")
 }
-if (-not $engine) {
-  Fail "VOICEVOX のエンジン（run.exe）が見つかりませんでした。`n        インストール先を確認してください。"
-}
+
+# 次回以降のために記憶しておく（このファイルは .gitignore 済み）
+try { Set-Content -LiteralPath $CONFIG -Value $engine -Encoding UTF8 } catch { }
 
 Note "エンジン: $engine"
 Note "起動しています... （このウィンドウを閉じるとエンジンも止まります）`n" Yellow
@@ -99,13 +163,15 @@ Note "起動しています... （このウィンドウを閉じるとエンジ�
 # ローカル運用と公開版のどちらからでも使えるようになる。
 $proc = Start-Process -FilePath $engine `
   -ArgumentList @('--allow_origin', $origin) `
+  -WorkingDirectory (Split-Path -Parent $engine) `
   -PassThru -NoNewWindow
 
 # ---------------------------------------------------- 起動を待って結果を出す
-$deadline = (Get-Date).AddSeconds(60)
+$deadline = (Get-Date).AddSeconds(90)
 $ok = $false
 Write-Host "起動待ち" -NoNewline
 while ((Get-Date) -lt $deadline) {
+  if ($proc.HasExited) { Write-Host ""; Fail "エンジンが起動直後に終了しました（終了コード $($proc.ExitCode)）。" }
   Start-Sleep -Milliseconds 800
   # 括弧で囲まないと Test-Port に "-and" という引数を渡す解釈になる
   if ((Test-Port) -and (Test-OriginAllowed)) { $ok = $true; break }
@@ -115,7 +181,11 @@ Write-Host ""
 
 if ($ok) {
   Note "`n起動しました。$origin から利用できます。" Green
-  Note "公開版のページを開き直すと VOICEVOX が使えるようになります。"
+  Note ""
+  Note "ブラウザ側でもう1つ許可が要ります（Chrome 142 以降）:" Yellow
+  Note "  公開版のページを開き直すと「ローカルネットワークに接続しようとしています」と"
+  Note "  聞かれるので「許可」を選んでください。"
+  Note "  出ない場合: アドレスバー左のアイコン → サイトの設定 → ローカルネットワーク → 許可"
 } else {
   Note "`n[警告] 起動を確認できませんでした。エンジンのログを確認してください。" Yellow
 }
