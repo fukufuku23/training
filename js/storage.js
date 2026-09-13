@@ -85,6 +85,7 @@ export const DEFAULT_SETTINGS = {
   equipment: [],
   default_minutes: 30,
   theme: "light",   // "light" | "dark" | "auto"
+  voice_enabled: true,   // 音声ガイドの読み上げ
 };
 
 export function emptyLog(date) {

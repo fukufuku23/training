@@ -955,3 +955,139 @@ ol, ul { list-style: none; padding: 0; }
   .today-side { margin-top: 0; position: sticky; top: 90px; }
   .course { text-align: center; }
 }
+
+/* =========================================================================
+   音声ガイド：今日のメニューを通しで進める全画面
+   既存のテーマ変数だけで組む。OS のダークモードには追随しない。
+   ========================================================================= */
+
+.session {
+  position: fixed; inset: 0; z-index: 80;
+  background: var(--canvas);
+  display: flex; align-items: stretch; justify-content: center;
+}
+.session[hidden] { display: none; }
+
+/* セッション中は裏の画面をスクロールさせない */
+body.is-session { overflow: hidden; }
+
+.session__panel {
+  width: 100%; max-width: 560px;
+  display: flex; flex-direction: column;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+  gap: 12px;
+}
+
+.session__bar {
+  display: flex; align-items: center; gap: 10px;
+  min-height: var(--tap);
+}
+.session__phase {
+  /* wash の上では accent だと 4.34:1 で AA に届かない。accent-strong を使う
+     （ライト 5.74:1 / ダーク 7.12:1） */
+  font-size: 13px; font-weight: 700; color: var(--accent-strong);
+  padding: 4px 10px; border-radius: 999px; background: var(--accent-wash);
+}
+.session__count {
+  font-family: var(--font-num); font-size: 11px; font-weight: 700;
+  color: var(--ink-muted); margin-right: auto;
+}
+.session__close {
+  appearance: none; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--ink-muted); border-radius: var(--radius-sm);
+  min-height: 34px; padding: 0 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.session__close:hover { border-color: var(--danger); color: var(--danger); }
+
+.progress--session { height: 6px; flex: none; }
+
+/* --------------------------------------------------------------- 中央 */
+
+.session__stage {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px 16px;
+}
+
+.session__kind {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  color: var(--ink-muted); margin: 0;
+}
+.session__name {
+  font-size: clamp(22px, 6vw, 32px); line-height: 1.25;
+  margin: 0; color: var(--ink);
+}
+.session__detail { font-size: 13px; color: var(--ink-soft); margin: 0; }
+
+.session__timer {
+  font-family: var(--font-num); font-weight: 700;
+  font-size: clamp(56px, 20vw, 104px); line-height: 1;
+  color: var(--ink); margin: 8px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+.session__timer.is-urgent { color: var(--accent); }
+
+.session__art { width: 104px; max-width: 34vw; margin-top: 4px; }
+.session__art svg { width: 100%; height: auto; display: block; }
+/* pose の色は置き場所で決める決まり（art.js は currentColor ではなくクラスを振る） */
+.session__art .pose__head { fill: var(--accent); }
+.session__art .pose__line {
+  fill: none; stroke: var(--accent); stroke-width: 2.4;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* 休憩中は主張を下げる */
+.session__stage[data-kind="rest"] .session__art .pose__head { fill: var(--ink-muted); }
+.session__stage[data-kind="rest"] .session__art .pose__line { stroke: var(--ink-muted); }
+/* 予告中はこれから やる形 を見せたいので少しだけ控えめに */
+.session__stage[data-kind="announce"] .session__art { opacity: .75; }
+
+/* 休憩中は落ち着いた面に、実施中は主役の面に */
+.session__stage[data-kind="rest"] { background: var(--surface-2); }
+.session__stage[data-kind="rest"] .session__timer { color: var(--ink-soft); }
+.session__stage[data-kind="phase"] .session__name { color: var(--accent); }
+.session__stage[data-kind="finished"] .session__name { color: var(--accent); }
+
+/* 一時停止は「止まっている」と一目で分かるようにする */
+.session.is-paused .session__stage { opacity: .55; }
+
+/* --------------------------------------------------------------- 操作 */
+
+.session__controls {
+  display: grid; grid-template-columns: 1fr 1.6fr 1fr;
+  gap: 8px; align-items: stretch;
+}
+.session__main { margin: 0; min-height: 60px; width: 100%; border-radius: 14px; font-size: 16px; }
+
+/* 一時停止も「押せるもの」に見せる。btn--quiet は地の色が無く、
+   3分割の真ん中に置くとただの文字に見えてしまう */
+.session__main--pause {
+  background: var(--surface); border: 1px solid var(--border-strong);
+  color: var(--ink-soft); font-size: 14px;
+}
+.session__main--pause:hover { border-color: var(--accent); color: var(--accent); }
+.session__side {
+  margin: 0; min-height: 60px;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  border-radius: 14px; font-size: 12px;
+}
+.session__side:hover { border-color: var(--accent); color: var(--accent); }
+
+.session__foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 28px;
+}
+.session__voice { font-size: 11px; color: var(--ink-muted); }
+
+.link-btn {
+  appearance: none; background: none; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 700; color: var(--ink-muted);
+  text-decoration: underline; padding: 6px 2px;
+}
+.link-btn:hover { color: var(--accent); }
+
+@media (min-width: 700px) {
+  .session__panel { padding: 20px 20px 24px; gap: 14px; }
+  .session__art { width: 140px; }
+}

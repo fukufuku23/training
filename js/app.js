@@ -8,16 +8,17 @@
  *  - 休養日を明示的に肯定する（継続日数を切らさない）
  */
 
-import { EXERCISES } from "./exercises.js?v=20260913153947";
-import { storage, todayKey, shiftDate, toDateKey, requestPersistence } from "./storage.js?v=20260913153947";
+import { EXERCISES } from "./exercises.js?v=20260913160215";
+import { storage, todayKey, shiftDate, toDateKey, requestPersistence } from "./storage.js?v=20260913160215";
 import {
   CONDITIONS, PAIN_REGIONS, PURPOSES, TIME_PRESETS,
   conditionByKey, calcCalories, filterExercises, curateForTime, warningFor,
   uniqueCategoriesByType, uniqueEquipment, youtubeUrl, imageSearchUrl,
   regionGroupOf, REGION_GROUPS, buildSession, flattenSession,
-} from "./domain.js?v=20260913153947";
-import { poseArt, bodyMap, laurel } from "./art.js?v=20260913153947";
-import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js?v=20260913153947";
+} from "./domain.js?v=20260913160215";
+import { poseArt, bodyMap, laurel } from "./art.js?v=20260913160215";
+import { Guide } from "./guide.js?v=20260913160215";
+import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js?v=20260913160215";
 
 const EX_BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
 
@@ -645,17 +646,78 @@ async function loadMediaIndex() {
 }
 
 /** 「はじめる」= 次にやる種目まで運んで強調するだけ。判断を増やさない */
+/**
+ * 「はじめる」は音声ガイドを開く。
+ * 開始の判断を1つに保ちたいので、ここでリストへスクロールさせる従来動作は
+ * ガイドを開けないときの退避にした（リストから個別に記録する道は残っている）。
+ */
 function setupStartButton() {
-  $("start-btn").addEventListener("click", () => {
-    const next = state.flat.find((p) => !state.loggedToday.has(p.ex.id));
-    if (!next) return;
-    const el = document.querySelector(`.ex[data-id="${next.ex.id}"]`);
-    if (!el) return;
-    document.querySelectorAll(".ex.is-next").forEach((c) => c.classList.remove("is-next"));
-    el.classList.add("is-next");
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  $("start-btn").addEventListener("click", async () => {
+    const remaining = state.flat.filter((p) => !state.loggedToday.has(p.ex.id));
+    if (remaining.length === 0) {
+      showToast("今日のメニューはすべて完了しています");
+      return;
+    }
+    const btn = $("start-btn");
+    btn.disabled = true;
+    try {
+      const opened = await guide.open(remaining);
+      if (!opened) scrollToNext();
+    } catch (err) {
+      console.error(err);
+      showToast("音声ガイドを開けませんでした");
+      scrollToNext();
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
+
+function scrollToNext() {
+  const next = state.flat.find((p) => !state.loggedToday.has(p.ex.id));
+  if (!next) return;
+  const el = document.querySelector(`.ex[data-id="${next.ex.id}"]`);
+  if (!el) return;
+  document.querySelectorAll(".ex.is-next").forEach((c) => c.classList.remove("is-next"));
+  el.classList.add("is-next");
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/**
+ * ガイドから届いた完了を記録する。
+ * 画面の行も同じように更新するので、ガイドを閉じたあと食い違わない。
+ */
+async function recordFromGuide(item) {
+  const ex = item.ex;
+  if (state.loggedToday.has(ex.id)) return;
+  const calories = calcCalories(ex, effectiveWeight(), item.sets);
+  try {
+    state.log = await storage.addExercise(state.today, {
+      id: ex.id, name: ex.name, calories,
+    });
+    state.loggedToday.add(ex.id);
+    const rowEl = document.querySelector(`.ex[data-id="${ex.id}"]`);
+    const btnEl = rowEl && rowEl.querySelector(".ex__done");
+    if (rowEl && btnEl) markRowDone(rowEl, btnEl, false);
+    updateProgress();
+    await renderSide();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+const guide = new Guide({
+  onExerciseDone: recordFromGuide,
+  onClose: () => { scrollToNext(); },
+  settings: { voice_enabled: true },
+});
+
+// ガイド内で音声のオンオフを変えたら設定として覚えておく
+document.addEventListener("voice-pref-changed", (e) => {
+  if (!state.settings) return;
+  state.settings.voice_enabled = e.detail.enabled;
+  persistSettings().catch(() => { });
+});
 
 function setupRestButton() {
   $("rest-btn").addEventListener("click", async () => {
@@ -767,6 +829,7 @@ async function persistSettings() {
     equipment: Array.from(state.filters.equipment),
     default_minutes: state.settings.default_minutes,
     theme: state.settings.theme,
+    voice_enabled: state.settings.voice_enabled !== false,
   });
 }
 
@@ -1108,6 +1171,7 @@ async function init() {
   state.settings = settings;
   state.log = log;
   applyTheme(settings.theme);
+  guide.settings = settings;   // 音声のオンオフは設定として持ち回る
   state.loggedToday = new Set((log.exercises || []).map((e) => e.id));
 
   state.filters.strengthCategory = new Set(settings.strength_categories);

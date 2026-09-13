@@ -75,9 +75,13 @@ if ($OpenOnly) {
 # ブラウザのHTTPキャッシュから返される。URL を変える以外に手がない。
 $stamp = Get-Date -Format 'yyyyMMddHHmmss'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-foreach ($f in @('index.html', 'js\app.js')) {
-  $p = Join-Path $PSScriptRoot $f
+# 対象を列挙で持つとモジュールを増やすたびに直し忘れる。js配下は全部見る。
+$targets = @(Join-Path $PSScriptRoot 'index.html')
+$targets += (Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'js') -Filter '*.js' |
+             ForEach-Object { $_.FullName })
+foreach ($p in $targets) {
   $t = [IO.File]::ReadAllText($p, $utf8)
+  if ($t -notmatch '\?v=') { continue }
   $t = [regex]::Replace($t, '\?v=[0-9A-Za-z]+', "?v=$stamp")
   [IO.File]::WriteAllText($p, $t, $utf8)
 }

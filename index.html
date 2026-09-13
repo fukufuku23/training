@@ -21,7 +21,7 @@
     if (t !== "light") document.documentElement.dataset.theme = t;
   } catch (e) { /* プライベートモード等では既定のライトのまま */ }
 </script>
-<link rel="stylesheet" href="css/style.css?v=20260913153947">
+<link rel="stylesheet" href="css/style.css?v=20260913160215">
 </head>
 <body>
 
@@ -381,8 +381,44 @@
   </div>
 </div>
 
+<!-- 音声ガイド：今日のメニューを通しで進める画面 -->
+<div class="session" id="session" hidden>
+  <div class="session__panel" role="dialog" aria-modal="true" aria-label="音声ガイド">
+
+    <header class="session__bar">
+      <span class="session__phase" id="session-phase"></span>
+      <span class="session__count" id="session-count"></span>
+      <button type="button" class="session__close" id="session-close" aria-label="ガイドを終了">終了</button>
+    </header>
+
+    <div class="progress progress--session" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+      <div class="progress__bar" id="session-progress"></div>
+    </div>
+
+    <div class="session__stage" id="session-stage">
+      <p class="session__kind" id="session-kind"></p>
+      <h2 class="session__name" id="session-name">—</h2>
+      <p class="session__detail" id="session-detail"></p>
+      <div class="session__timer" id="session-timer">—</div>
+      <div class="session__art" id="session-art" aria-hidden="true"></div>
+    </div>
+
+    <div class="session__controls">
+      <button type="button" class="btn btn--quiet session__side" id="session-back">前の種目</button>
+      <button type="button" class="btn btn--cta session__main" id="session-main">一時停止</button>
+      <button type="button" class="btn btn--quiet session__side" id="session-skip">スキップ</button>
+    </div>
+
+    <div class="session__foot">
+      <span class="session__voice" id="session-voice"></span>
+      <button type="button" class="link-btn" id="session-mute" aria-pressed="false">音声を止める</button>
+    </div>
+
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script type="module" src="js/app.js?v=20260913153947"></script>
+<script type="module" src="js/app.js?v=20260913160215"></script>
 </body>
 </html>
