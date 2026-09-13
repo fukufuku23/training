@@ -10,7 +10,7 @@
  *  3. 一時停止は締切そのものをずらす。止めている間の時間は無かったことにする。
  */
 
-import { REST_SEC_STRENGTH } from "./domain.js?v=20260913162025";
+import { REST_SEC_STRENGTH } from "./domain.js?v=20260913165158";
 
 /** その種目が時間で終わるか（＝自動で進めてよいか） */
 export function isTimed(ex) {
@@ -164,6 +164,9 @@ export class SessionRunner {
   }
 
   get current() { return this.i >= 0 ? this.steps[this.i] : null; }
+
+  /** 時計が動き出しているか。読み上げ待ちの間は false */
+  get started() { return this.endAt != null; }
 
   get remainingMs() {
     const st = this.current;

@@ -5,10 +5,10 @@
  * 判断はここではしない。ここにあるのは「何をどう見せるか」だけ。
  */
 
-import { voice } from "./voice.js?v=20260913162025";
-import { buildSteps, SessionRunner, estimateTotalSec, isTimed } from "./session.js?v=20260913162025";
-import { poseArt } from "./art.js?v=20260913162025";
-import { regionGroupOf, PHASE_META } from "./domain.js?v=20260913162025";
+import { voice } from "./voice.js?v=20260913165158";
+import { buildSteps, SessionRunner, estimateTotalSec, isTimed } from "./session.js?v=20260913165158";
+import { poseArt } from "./art.js?v=20260913165158";
+import { regionGroupOf, PHASE_META } from "./domain.js?v=20260913165158";
 
 const $ = (id) => document.getElementById(id);
 
@@ -181,14 +181,29 @@ export class Guide {
     if (!r) return;
     const st = r.current;
     const el = $("session-timer");
-    if (!st || (st.kind === "work" && st.mode === "manual")) {
-      el.textContent = st && st.reps ? `${st.reps}回` : "—";
-      el.classList.remove("is-urgent");
+
+    // 段の切り替えと予告は「お知らせ」であって計測ではない。
+    // ここに大きな数字を出すと、何に向かって減っているのか分からない
+    // カウントダウンに見えてしまう。
+    if (!st || st.kind === "phase" || st.kind === "announce") {
+      el.hidden = true;
+      el.textContent = "";
+      el.classList.remove("is-urgent", "is-idle");
       return;
     }
+    el.hidden = false;
+
+    if (st.kind === "work" && st.mode === "manual") {
+      el.textContent = st.reps ? `${st.reps}回` : "—";
+      el.classList.remove("is-urgent", "is-idle");
+      return;
+    }
+
     const ms = r.remainingMs;
     el.textContent = ms == null ? "—" : mmss(ms);
-    el.classList.toggle("is-urgent", ms != null && ms <= 3200);
+    el.classList.toggle("is-urgent", r.started && ms != null && ms <= 3200);
+    // 「スタート」を言い終わるまでは止まっている。色で区別が付くようにする
+    el.classList.toggle("is-idle", !r.started);
   }
 
   renderProgress() {

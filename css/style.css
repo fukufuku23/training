@@ -1028,6 +1028,9 @@ body.is-session { overflow: hidden; }
   font-variant-numeric: tabular-nums;
 }
 .session__timer.is-urgent { color: var(--accent); }
+/* 読み上げ待ちで、まだ計測が始まっていない状態 */
+.session__timer.is-idle { color: var(--ink-muted); }
+.session__timer[hidden] { display: none; }
 
 .session__art { width: 104px; max-width: 34vw; margin-top: 4px; }
 .session__art svg { width: 100%; height: auto; display: block; }
