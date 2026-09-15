@@ -86,6 +86,7 @@ export const DEFAULT_SETTINGS = {
   default_minutes: 30,
   theme: "light",   // "light" | "dark" | "auto"
   voice_enabled: true,   // 音声ガイドの読み上げ
+  strength_level: 3,     // 体力レベル 1-5。こなせない種目を出さないために使う
 };
 
 export function emptyLog(date) {

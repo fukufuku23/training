@@ -8,17 +8,18 @@
  *  - 休養日を明示的に肯定する（継続日数を切らさない）
  */
 
-import { EXERCISES } from "./exercises.js?v=20260914161718";
-import { storage, todayKey, shiftDate, toDateKey, requestPersistence } from "./storage.js?v=20260914161718";
+import { EXERCISES } from "./exercises.js?v=20260916005440";
+import { storage, todayKey, shiftDate, toDateKey, requestPersistence } from "./storage.js?v=20260916005440";
 import {
   CONDITIONS, PAIN_REGIONS, PURPOSES, TIME_PRESETS,
   conditionByKey, calcCalories, filterExercises, curateForTime, warningFor,
   uniqueCategoriesByType, uniqueEquipment, youtubeUrl, imageSearchUrl,
   regionGroupOf, REGION_GROUPS, buildSession, flattenSession,
-} from "./domain.js?v=20260914161718";
-import { poseArt, bodyMap, laurel } from "./art.js?v=20260914161718";
-import { Guide } from "./guide.js?v=20260914161718";
-import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js?v=20260914161718";
+  STRENGTH_LEVELS, DEFAULT_LEVEL, clampLevel, levelRange,
+} from "./domain.js?v=20260916005440";
+import { poseArt, bodyMap, laurel } from "./art.js?v=20260916005440";
+import { Guide } from "./guide.js?v=20260916005440";
+import { renderWeightChart, renderCaloriesChart, renderBalanceChart } from "./chart.js?v=20260916005440";
 
 const EX_BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
 
@@ -262,6 +263,7 @@ function renderToday() {
     ...state.filters,
     painRegions: state.log.pain_regions || [],
     conditionKey: state.log.condition,
+    strengthLevel: (state.settings && state.settings.strength_level) || DEFAULT_LEVEL,
   });
   const { picked, totalMin } = curateForTime(filtered, currentMinutes(), state.log.condition);
   state.phases = buildSession(picked);
@@ -780,6 +782,31 @@ function applyTheme(theme) {
   }
 }
 
+/**
+ * 体力レベル。ここを変えると出てくる種目そのものが変わるので、
+ * 何件が対象になるのかをその場で示す（黙って変わると理由が分からない）。
+ */
+function renderLevelChips() {
+  const current = () => clampLevel(state.settings.strength_level);
+  buildValueChips("chips-level", STRENGTH_LEVELS.map((l) => l.key),
+    current,
+    async (key) => {
+      state.settings.strength_level = key;
+      await persistSettings();
+      renderLevelChips();
+      renderToday();
+      if (typeof renderCatalog === "function") renderCatalog();
+    },
+    (key) => `${key}. ${(STRENGTH_LEVELS.find((l) => l.key === key) || {}).label}`);
+
+  const lv = current();
+  const meta = STRENGTH_LEVELS.find((l) => l.key === lv) || {};
+  const [lo, hi] = levelRange(lv);
+  const n = state.exercises.filter(
+    (ex) => ex.type === "strength" && (ex.level || 3) >= lo && (ex.level || 3) <= hi).length;
+  $("level-hint").textContent = `${meta.note} ・ 対象の筋トレ ${n}種目`;
+}
+
 function renderThemeChips() {
   buildValueChips("chips-theme", THEMES.map((t) => t.key),
     () => state.settings.theme || "light",
@@ -830,6 +857,7 @@ async function persistSettings() {
     default_minutes: state.settings.default_minutes,
     theme: state.settings.theme,
     voice_enabled: state.settings.voice_enabled !== false,
+    strength_level: clampLevel(state.settings.strength_level),
   });
 }
 
@@ -1139,6 +1167,145 @@ async function renderStorageInfo() {
 
 /* ---------------- ナビゲーション ---------------- */
 
+/* ---------------- 種目一覧 ---------------- */
+
+const catalogState = { q: "", type: "all", level: "all", equip: "all" };
+
+function levelDot(level) {
+  // 1〜5を目盛りで見せる。数字だけだと大小の感覚が掴めない
+  const wrap = document.createElement("span");
+  wrap.className = "lv";
+  wrap.title = `負荷レベル ${level}`;
+  for (let i = 1; i <= 5; i++) {
+    const d = document.createElement("i");
+    d.className = "lv__dot" + (i <= level ? " is-on" : "");
+    wrap.appendChild(d);
+  }
+  return wrap;
+}
+
+function catalogMatches(ex) {
+  const [lo, hi] = levelRange(clampLevel(state.settings.strength_level));
+  const lv = ex.level || 3;
+  if (catalogState.type !== "all" && ex.type !== catalogState.type) return false;
+  if (catalogState.equip !== "all" && ex.equipment !== catalogState.equip) return false;
+  if (catalogState.level === "mine") {
+    if (ex.type === "stretch" ? lv > hi + 1 : (lv < lo || lv > hi)) return false;
+  } else if (catalogState.level !== "all" && lv !== Number(catalogState.level)) {
+    return false;
+  }
+  const q = catalogState.q.trim();
+  if (q) {
+    const hay = `${ex.name} ${ex.category} ${ex.equipment} ${(ex.purpose || []).join(" ")}`;
+    if (!hay.toLowerCase().includes(q.toLowerCase())) return false;
+  }
+  return true;
+}
+
+function renderCatalog() {
+  const box = $("ex-catalog");
+  box.innerHTML = "";
+  const list = state.exercises.filter(catalogMatches);
+
+  $("ex-count").textContent = list.length === 0
+    ? "条件に合う種目がありません"
+    : `${list.length} / ${state.exercises.length} 種目`;
+
+  if (list.length === 0) return;
+
+  // 部位ごとにまとめる。フラットに並べると300件は読めない
+  const byCategory = new Map();
+  list.forEach((ex) => {
+    if (!byCategory.has(ex.category)) byCategory.set(ex.category, []);
+    byCategory.get(ex.category).push(ex);
+  });
+
+  for (const [cat, items] of byCategory) {
+    const head = document.createElement("h4");
+    head.className = "catalog__head";
+    head.textContent = `${cat}（${items.length}）`;
+    box.appendChild(head);
+
+    const ul = document.createElement("ul");
+    ul.className = "catalog";
+    items.sort((a, b) => (a.level || 3) - (b.level || 3));
+    items.forEach((ex) => {
+      const li = document.createElement("li");
+      li.className = "catalog__row" + (ex.type === "stretch" ? " catalog__row--stretch" : "");
+
+      const art = document.createElement("span");
+      art.className = "catalog__art";
+      art.appendChild(poseArt(regionGroupOf(ex.category)));
+      li.appendChild(art);
+
+      const body = document.createElement("div");
+      body.className = "catalog__body";
+      const name = document.createElement("span");
+      name.className = "catalog__name";
+      name.textContent = ex.name;
+      body.appendChild(name);
+      const meta = document.createElement("span");
+      meta.className = "catalog__meta";
+      const amount = ex.default_duration_sec != null
+        ? `${ex.default_duration_sec}秒`
+        : `${ex.default_reps || 10}回`;
+      const parts = [ex.type === "stretch" ? "ストレッチ" : "筋トレ",
+                     `${amount} × ${ex.default_sets}セット`];
+      if (ex.equipment && ex.equipment !== "なし") parts.push(ex.equipment);
+      if (ex.daily_ok) parts.push("毎日OK");
+      meta.textContent = parts.join(" ・ ");
+      body.appendChild(meta);
+      li.appendChild(body);
+
+      li.appendChild(levelDot(ex.level || 3));
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }
+}
+
+function setupCatalog() {
+  const rerender = () => renderCatalog();
+
+  buildValueChips("ex-filter-type", ["all", "strength", "stretch"],
+    () => catalogState.type,
+    (v) => { catalogState.type = v; setupCatalogChips(); rerender(); },
+    (v) => ({ all: "すべて", strength: "筋トレ", stretch: "ストレッチ" }[v]));
+
+  buildValueChips("ex-filter-level", ["all", "mine", 1, 2, 3, 4, 5],
+    () => catalogState.level,
+    (v) => { catalogState.level = v; setupCatalogChips(); rerender(); },
+    (v) => ({ all: "すべて", mine: "自分のレベル" }[v] || `レベル${v}`));
+
+  const equips = ["all", ...uniqueEquipment(state.exercises)];
+  buildValueChips("ex-filter-equip", equips,
+    () => catalogState.equip,
+    (v) => { catalogState.equip = v; setupCatalogChips(); rerender(); },
+    (v) => (v === "all" ? "すべて" : v));
+
+  const input = $("ex-search");
+  input.addEventListener("input", () => { catalogState.q = input.value; rerender(); });
+
+  renderCatalog();
+}
+
+// 選択状態を描き直すだけの再構築（buildValueChips は毎回作り直す作り）
+function setupCatalogChips() {
+  buildValueChips("ex-filter-type", ["all", "strength", "stretch"],
+    () => catalogState.type,
+    (v) => { catalogState.type = v; setupCatalogChips(); renderCatalog(); },
+    (v) => ({ all: "すべて", strength: "筋トレ", stretch: "ストレッチ" }[v]));
+  buildValueChips("ex-filter-level", ["all", "mine", 1, 2, 3, 4, 5],
+    () => catalogState.level,
+    (v) => { catalogState.level = v; setupCatalogChips(); renderCatalog(); },
+    (v) => ({ all: "すべて", mine: "自分のレベル" }[v] || `レベル${v}`));
+  const equips = ["all", ...uniqueEquipment(state.exercises)];
+  buildValueChips("ex-filter-equip", equips,
+    () => catalogState.equip,
+    (v) => { catalogState.equip = v; setupCatalogChips(); renderCatalog(); },
+    (v) => (v === "all" ? "すべて" : v));
+}
+
 function setupNav() {
   document.querySelectorAll(".nav__item").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1149,6 +1316,7 @@ function setupNav() {
         .forEach((v) => v.classList.toggle("is-active", v.id === `view-${view}`));
       window.scrollTo({ top: 0, behavior: "instant" });
       if (view === "history") { renderCalendar(); renderCharts(); }
+      if (view === "exercises") renderCatalog();
     });
   });
 }
@@ -1198,7 +1366,9 @@ async function init() {
   renderPainChips();
   syncBodyMapSelection();
   renderSettingsFilters();
+  renderLevelChips();
   renderThemeChips();
+  setupCatalog();
   renderRangeChips();
   renderToday();
 

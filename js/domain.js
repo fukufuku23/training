@@ -20,6 +20,39 @@ export const MAX_MINUTES = 120;
 
 export const PURPOSES = ["筋肥大", "筋力向上", "引き締め", "柔軟性向上"];
 
+/**
+ * 体力レベル（負荷の目安）。
+ * 種目側の level と突き合わせて、こなせない種目を最初から出さないようにする。
+ * 「できない種目が並ぶ」のは続かない一番の理由なので、ここは強めに効かせる。
+ */
+export const STRENGTH_LEVELS = [
+  { key: 1, label: "かなりやさしい", note: "壁や椅子を使う。運動から離れていた人向け" },
+  { key: 2, label: "やさしい", note: "膝つき腕立てなど。自重の入り口" },
+  { key: 3, label: "標準", note: "通常の腕立て・スクワットができる" },
+  { key: 4, label: "強い", note: "片脚・足上げなど、体重以上の負荷を扱える" },
+  { key: 5, label: "かなり強い", note: "片手や跳ぶ種目に挑める" },
+];
+
+export const DEFAULT_LEVEL = 3;
+
+export function clampLevel(v) {
+  const n = parseInt(v, 10);
+  if (Number.isNaN(n)) return DEFAULT_LEVEL;
+  return Math.min(5, Math.max(1, n));
+}
+
+/**
+ * そのレベルの人に出してよい種目の範囲。
+ *
+ * 自分のレベルだけに絞ると種目が偏るので、ひとつ下も混ぜる。
+ * レベル5は該当種目が少ないため、ふたつ下まで広げる。
+ */
+export function levelRange(userLevel) {
+  const lv = clampLevel(userLevel);
+  const lo = lv >= 5 ? lv - 2 : lv - 1;
+  return [Math.max(1, lo), lv];
+}
+
 export const CONDITIONS = [
   { key: "good", label: "絶好調", face: "◕‿◕", setsDelta: 1, lightOnly: false,
     note: "いつもより少し多めの負荷にします。" },
@@ -202,12 +235,22 @@ export function filterExercises(exercises, opts) {
     equipment = new Set(),
     painRegions = [],
     conditionKey = "normal",
+    strengthLevel = DEFAULT_LEVEL,
   } = opts;
 
   const painExcluded = excludedCategoriesForPain(painRegions);
   const cond = conditionByKey(conditionKey);
+  const [loLv, hiLv] = levelRange(strengthLevel);
 
   return exercises.filter((ex) => {
+    // 負荷レベル。筋トレは範囲で絞り、ストレッチは柔らかく上限だけ見る
+    // （ストレッチは筋力ではなく可動域の話なので、下限で切ると無意味に減る）
+    const lv = ex.level || 3;
+    if (ex.type === "stretch") {
+      if (lv > hiLv + 1) return false;
+    } else if (lv < loLv || lv > hiLv) {
+      return false;
+    }
     if (ex.type === "strength" && strengthCategory.size > 0
         && !strengthCategory.has(ex.category)) return false;
     if (ex.type === "stretch" && stretchCategory.size > 0

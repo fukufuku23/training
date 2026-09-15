@@ -6,7 +6,7 @@
  * スマホから http://192.168.x.x で開くと登録されない。
  */
 
-const CACHE = "training-log-v7";
+const CACHE = "training-log-v8";
 
 const PRECACHE = [
   "./",

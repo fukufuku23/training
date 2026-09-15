@@ -21,7 +21,7 @@
     if (t !== "light") document.documentElement.dataset.theme = t;
   } catch (e) { /* プライベートモード等では既定のライトのまま */ }
 </script>
-<link rel="stylesheet" href="css/style.css?v=20260914161718">
+<link rel="stylesheet" href="css/style.css?v=20260916005440">
 </head>
 <body>
 
@@ -52,6 +52,12 @@
         <svg viewBox="0 0 24 24"><path d="M7 2v2h10V2h2v2h2v18H3V4h2V2zm12 8H5v10h14zM7 12h4v4H7z"/></svg>
       </span>
       <span class="nav__label">記録</span>
+    </button>
+    <button type="button" class="nav__item" data-view="exercises">
+      <span class="nav__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 6h2v2H4zm0 5h2v2H4zm0 5h2v2H4zM9 6h11v2H9zm0 5h11v2H9zm0 5h11v2H9z"/></svg>
+      </span>
+      <span class="nav__label">種目</span>
     </button>
     <button type="button" class="nav__item" data-view="settings">
       <span class="nav__icon" aria-hidden="true">
@@ -225,6 +231,36 @@
     <!-- ============================================================ -->
     <!-- 設定                                                          -->
     <!-- ============================================================ -->
+    <!-- 種目一覧：いま何が登録されていて、自分のレベルで何が出るのかを確かめる場所 -->
+    <section class="view" id="view-exercises">
+
+      <section class="panel">
+        <div class="field">
+          <span class="field__label">種目をさがす</span>
+          <input type="search" id="ex-search" class="input input--search"
+                 placeholder="種目名・部位・道具で絞り込む" autocomplete="off">
+        </div>
+        <div class="field">
+          <span class="field__label">種類</span>
+          <div class="chip-row" id="ex-filter-type"></div>
+        </div>
+        <div class="field">
+          <span class="field__label">負荷レベル</span>
+          <div class="chip-row" id="ex-filter-level"></div>
+        </div>
+        <div class="field">
+          <span class="field__label">道具</span>
+          <div class="chip-row" id="ex-filter-equip"></div>
+        </div>
+        <p class="field__hint" id="ex-count"></p>
+      </section>
+
+      <section class="panel">
+        <div class="ex-catalog" id="ex-catalog"></div>
+      </section>
+
+    </section>
+
     <section class="view" id="view-settings">
       <section class="panel">
         <div class="field">
@@ -254,6 +290,12 @@
 
       <section class="panel">
         <h2 class="panel__title">表示</h2>
+        <div class="field">
+          <span class="field__label">体力レベル</span>
+          <div class="chip-row" id="chips-level"></div>
+          <p class="field__hint" id="level-hint"></p>
+        </div>
+
         <div class="field">
           <span class="field__label">配色</span>
           <div class="chip-row" id="chips-theme"></div>
@@ -419,6 +461,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script type="module" src="js/app.js?v=20260914161718"></script>
+<script type="module" src="js/app.js?v=20260916005440"></script>
 </body>
 </html>
